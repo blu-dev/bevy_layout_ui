@@ -17,10 +17,12 @@ pub fn main() {
     app.world.spawn((
         Transform::from_xy(150.0, 150.0),
         GlobalTransform::default(),
-        NodeSize {
-            base_size: Vec2::splat(300.0),
-            size: Vec2::splat(300.0),
-        },
+        NodeSize(Vec2::splat(300.0)),
+    ));
+    app.world.spawn((
+        Transform::from_xy(500.0, 500.0),
+        GlobalTransform::default(),
+        NodeSize(Vec2::splat(20.0)),
     ));
 
     app.run();

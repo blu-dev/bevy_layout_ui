@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use bevy::app::Plugin;
 use bevy::asset::load_internal_asset;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
@@ -7,23 +9,34 @@ use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_graph::{RenderGraphApp, RenderLabel, ViewNode, ViewNodeRunner};
 use bevy::render::render_resource::{
-    BlendState, BufferUsages, BufferVec, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-    FragmentState, FrontFace, IndexFormat, LoadOp, MultisampleState, Operations, PipelineCache,
-    PolygonMode, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipelineDescriptor, StoreOp, TextureFormat, VertexBufferLayout, VertexFormat,
-    VertexState, VertexStepMode,
+    BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingType, BlendState,
+    BufferBindingType, BufferUsages, BufferVec, CachedRenderPipelineId, ColorTargetState,
+    ColorWrites, FragmentState, FrontFace, IndexFormat, LoadOp, MultisampleState, Operations,
+    PipelineCache, PolygonMode, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderPipelineDescriptor, ShaderStages, ShaderType, StoreOp, TextureFormat, VertexBufferLayout,
+    VertexFormat, VertexState, VertexStepMode,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::BevyDefault;
 use bevy::render::view::ViewTarget;
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
+use bytemuck::{Pod, Zeroable};
 
-use crate::math::{BoundingBox, GlobalTransform, NonAxisAlignedBoundingBox};
+use crate::math::{BoundingBox, GlobalTransform, NodeSize, NonAxisAlignedBoundingBox};
+
+#[repr(C)]
+#[derive(Pod, Zeroable, Debug, Copy, Clone, ShaderType)]
+pub struct ViewUniform {
+    pub render_target_size: Vec2,
+    pub padding: Vec2,
+    pub screen_to_ndc: [[f32; 4]; 3],
+}
 
 pub struct UiRenderPlugin;
 
 #[derive(Resource)]
 pub struct UiNodePipeline {
+    pub bind_group_layout: BindGroupLayout,
     pub pipeline_id: CachedRenderPipelineId,
 }
 
@@ -34,9 +47,25 @@ impl UiNodePipeline {
 impl FromWorld for UiNodePipeline {
     fn from_world(world: &mut World) -> Self {
         let pipeline_cache = world.resource::<PipelineCache>();
+        let render_device = world.resource::<RenderDevice>();
+
+        let bind_group = render_device.create_bind_group_layout(
+            "UiNodePipeline.view_uniform_layout",
+            &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(ViewUniform::min_size()),
+                },
+                count: None,
+            }],
+        );
+
         let pipeline_id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
             label: Some("RenderPipelineDescriptor".into()),
-            layout: vec![],
+            layout: vec![bind_group.clone()],
             push_constant_ranges: vec![],
             vertex: VertexState {
                 shader: Self::SHADER.clone(),
@@ -44,7 +73,7 @@ impl FromWorld for UiNodePipeline {
                 entry_point: "vertex".into(),
                 buffers: vec![VertexBufferLayout::from_vertex_formats(
                     VertexStepMode::Instance,
-                    [VertexFormat::Float32x2; 4],
+                    [VertexFormat::Float32x2; 3],
                 )],
             },
             primitive: PrimitiveState {
@@ -74,7 +103,10 @@ impl FromWorld for UiNodePipeline {
             }),
         });
 
-        Self { pipeline_id }
+        Self {
+            bind_group_layout: bind_group,
+            pipeline_id,
+        }
     }
 }
 
@@ -83,8 +115,6 @@ pub struct UiLayoutNode;
 
 pub struct ExtractedNode {
     pub affine: Affine2,
-    pub bounding_box: NonAxisAlignedBoundingBox,
-    pub aabb: BoundingBox,
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -100,33 +130,23 @@ impl Default for ExtractedNodes {
 }
 
 pub fn extract_nodes(
-    nodes: Extract<
-        Query<(
-            Entity,
-            &GlobalTransform,
-            &NonAxisAlignedBoundingBox,
-            &BoundingBox,
-        )>,
-    >,
+    nodes: Extract<Query<(Entity, &GlobalTransform, &NodeSize)>>,
     mut extracted_nodes: ResMut<ExtractedNodes>,
 ) {
     extracted_nodes.clear();
-    for (entity, transform, bounding_box, aabb) in nodes.iter() {
-        extracted_nodes.insert(
-            entity,
-            ExtractedNode {
-                affine: transform.affine(),
-                bounding_box: *bounding_box,
-                aabb: *aabb,
-            },
-        );
+    for (entity, transform, node_size) in nodes.iter() {
+        let mut affine = transform.affine();
+        affine.matrix2 *= Mat2::from_scale_angle(node_size.0, 0.0);
+        extracted_nodes.insert(entity, ExtractedNode { affine });
     }
 }
 
 #[derive(Resource)]
 pub struct PreparedResources {
-    pub vertex_buffer: BufferVec<[Vec2; 4]>,
+    pub vertex_buffer: BufferVec<[[f32; 2]; 3]>,
     pub index_buffer: BufferVec<u32>,
+    pub uniform_buffer: BufferVec<ViewUniform>,
+    pub bind_group: Option<BindGroup>,
 }
 
 impl Default for PreparedResources {
@@ -134,34 +154,72 @@ impl Default for PreparedResources {
         Self {
             vertex_buffer: BufferVec::new(BufferUsages::VERTEX),
             index_buffer: BufferVec::new(BufferUsages::INDEX),
+            uniform_buffer: BufferVec::new(BufferUsages::UNIFORM),
+            bind_group: None,
         }
     }
 }
 
 pub fn prepare_extracted_nodes(
     mut resources: ResMut<PreparedResources>,
+    pipeline: Res<UiNodePipeline>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     extracted: Res<ExtractedNodes>,
 ) {
     if resources.index_buffer.is_empty() {
-        resources.index_buffer.extend([0, 1, 2, 0, 2, 3]);
+        resources.index_buffer.extend([2, 1, 0, 2, 3, 1]);
         resources
             .index_buffer
             .write_buffer(&render_device, &render_queue);
     }
 
+    if resources.uniform_buffer.is_empty() {
+        let matrix = Mat3::from_scale_angle_translation(
+            Vec2::new(960.0f32.recip(), -540.0f32.recip()),
+            0.0,
+            Vec2::new(-1.0, 1.0),
+        );
+
+        let cols = matrix.to_cols_array_2d();
+        let cols = [
+            [cols[0][0], cols[0][1], cols[0][2], 0.0],
+            [cols[1][0], cols[1][1], cols[1][2], 0.0],
+            [cols[2][0], cols[2][1], cols[2][2], 0.0],
+        ];
+
+        resources.uniform_buffer.push(ViewUniform {
+            render_target_size: Vec2::new(1920.0, 1080.0),
+            padding: Vec2::ZERO,
+            screen_to_ndc: cols,
+        });
+
+        resources
+            .uniform_buffer
+            .write_buffer(&render_device, &render_queue);
+
+        resources.bind_group = Some(
+            render_device.create_bind_group(
+                "view_uniform_bind_group",
+                &pipeline.bind_group_layout,
+                &[BindGroupEntry {
+                    binding: 0,
+                    resource: resources
+                        .uniform_buffer
+                        .buffer()
+                        .unwrap()
+                        .as_entire_binding(),
+                }],
+            ),
+        );
+    }
+
     resources.vertex_buffer.clear();
 
-    let ndc = |vec: Vec2| -> Vec2 { Vec2::new((vec.x / 960.0) - 1.0, -(vec.y / 540.0) + 1.0) };
-
     for extracted in extracted.values() {
-        resources.vertex_buffer.push([
-            ndc(extracted.bounding_box.top_left()),
-            ndc(extracted.bounding_box.top_right()),
-            ndc(extracted.bounding_box.bottom_right()),
-            ndc(extracted.bounding_box.bottom_left()),
-        ]);
+        resources
+            .vertex_buffer
+            .push(extracted.affine.to_cols_array_2d());
     }
 
     resources
@@ -207,6 +265,7 @@ impl ViewNode for UiLayoutNode {
             });
 
             rpass.set_pipeline(pipeline);
+            rpass.set_bind_group(0, resources.bind_group.as_ref().unwrap(), &[]);
             rpass.set_vertex_buffer(0, *resources.vertex_buffer.buffer().unwrap().slice(..));
             rpass.set_index_buffer(
                 *resources.index_buffer.buffer().unwrap().slice(..),

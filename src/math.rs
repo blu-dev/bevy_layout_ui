@@ -2,17 +2,8 @@
 
 use bevy::{ecs::query::QueryData, math::Affine2, prelude::*};
 
-#[derive(Debug, Copy, Clone, Component, Reflect)]
-pub struct NodeSize {
-    /// This is the initial size of the node, and what is considered in the
-    /// range for rendering the node.
-    pub base_size: Vec2,
-
-    /// This is the actual screen space of the node. If it is larger than `base_size`,
-    /// then draw commands which draw outside of the `base_size` boundaries will render up to this
-    /// boundary.
-    pub size: Vec2,
-}
+#[derive(Debug, Copy, Clone, Component, Reflect, Deref, DerefMut)]
+pub struct NodeSize(pub Vec2);
 
 #[derive(Debug, Copy, Clone, Component, Reflect)]
 pub struct BoundingBox {
@@ -183,7 +174,7 @@ pub fn compute_bounding_box(
     >,
 ) {
     query.par_iter_mut().for_each(|data| {
-        let half_extent = data.node_size.size / 2.0;
+        let half_extent = data.node_size.0 / 2.0;
         let affine = data.global_transform.affine();
         let bbox = NonAxisAlignedBoundingBox {
             top_left: affine.transform_point2(-half_extent),
