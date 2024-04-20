@@ -1,11 +1,10 @@
 #import bevy_render::maths::affine2_to_square
 
-struct ViewUniform {
-    screen_size: vec2<f32>,
+struct LayoutUniform {
     screen_to_ndc: mat3x3<f32>
 };
 
-@group(0) @binding(0) var<uniform> view: ViewUniform;
+@group(0) @binding(0) var<uniform> view: LayoutUniform;
 
 struct VertexInput {
     @builtin(vertex_index) vertex_index: u32,

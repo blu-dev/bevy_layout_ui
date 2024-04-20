@@ -39,6 +39,7 @@ impl Plugin for UiLayoutPlugin {
             .register_type::<math::GlobalTransform>()
             .register_type::<math::BoundingBox>()
             .register_type::<math::NonAxisAlignedBoundingBox>()
-            .register_type::<math::NodeSize>();
+            .register_type::<math::NodeSize>()
+            .register_type::<render::UiNodeSettings>();
     }
 }

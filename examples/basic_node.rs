@@ -2,7 +2,7 @@ use bevy::{prelude::*, sprite::Anchor};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_layout_ui::{
     math::{GlobalTransform, NodeSize, Transform},
-    render::UiRenderPlugin,
+    render::{UiNodeSettings, UiRenderPlugin},
     UiLayoutPlugin,
 };
 pub fn main() {
@@ -20,6 +20,9 @@ pub fn main() {
             GlobalTransform::default(),
             NodeSize(Vec2::splat(300.0)),
             Anchor::Center,
+            UiNodeSettings {
+                target_resolution: UVec2::new(960, 540),
+            },
         ))
         .with_children(|children| {
             children.spawn((
@@ -27,6 +30,9 @@ pub fn main() {
                 GlobalTransform::default(),
                 NodeSize(Vec2::splat(20.0)),
                 Anchor::BottomRight,
+                UiNodeSettings {
+                    target_resolution: UVec2::new(960, 540),
+                },
             ));
         });
 
