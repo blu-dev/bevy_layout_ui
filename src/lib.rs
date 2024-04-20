@@ -4,6 +4,9 @@ use bevy::{
     prelude::*,
 };
 
+#[cfg(feature = "editor-ui")]
+pub mod editor;
+
 pub mod math;
 pub mod render;
 
