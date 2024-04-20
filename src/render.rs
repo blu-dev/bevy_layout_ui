@@ -137,9 +137,11 @@ pub fn extract_nodes(
     extracted_nodes.clear();
     for (entity, transform, node_size, anchor) in nodes.iter() {
         let mut affine = transform.affine();
-        affine.matrix2 *= Mat2::from_scale_angle(node_size.0, 0.0);
-        affine.translation -= node_size.0 / 2.0;
-        affine.translation -= (anchor.as_vec() * Vec2::new(1.0, -1.0)) * node_size.0;
+        affine = affine
+            * Affine2::from_mat2_translation(
+                Mat2::from_scale_angle(node_size.0, 0.0),
+                -(node_size.0 / 2.0 + (anchor.as_vec() * Vec2::new(1.0, -1.0)) * node_size.0),
+            );
         extracted_nodes.insert(entity, ExtractedNode { affine });
     }
 }
