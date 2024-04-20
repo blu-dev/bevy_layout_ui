@@ -1,6 +1,6 @@
 //! This module contains maths required for performing and propagating positioning information for nodes.
 
-use bevy::{ecs::query::QueryData, math::Affine2, prelude::*};
+use bevy::{ecs::query::QueryData, math::Affine2, prelude::*, sprite::Anchor};
 
 #[derive(Debug, Copy, Clone, Component, Reflect, Deref, DerefMut)]
 pub struct NodeSize(pub Vec2);
@@ -63,6 +63,7 @@ pub struct Transform {
     pub position: Vec2,
     pub scale: Vec2,
     pub rotation: f32,
+    pub parent_anchor: Anchor,
 }
 
 #[derive(Debug, Copy, Clone, Component, Reflect, Default)]
@@ -74,6 +75,7 @@ impl Transform {
             position: Vec2::ZERO,
             scale: Vec2::ONE,
             rotation: 0.0,
+            parent_anchor: Anchor::TopLeft,
         }
     }
 
@@ -132,8 +134,18 @@ impl Default for Transform {
 }
 
 impl GlobalTransform {
-    pub fn mul_transform(&self, transform: &Transform) -> Self {
-        Self(self.0 * transform.affine())
+    pub fn mul_transform(
+        &self,
+        self_size: &NodeSize,
+        self_anchor: &Anchor,
+        transform: &Transform,
+    ) -> Self {
+        let actual_position = Vec2::new(1.0, -1.0)
+            * (transform.parent_anchor.as_vec() - self_anchor.as_vec())
+            * self_size.0;
+        let mut affine = transform.affine();
+        affine.translation += actual_position;
+        Self(self.0 * affine)
     }
 
     pub fn affine(&self) -> Affine2 {
@@ -266,11 +278,27 @@ pub fn sync_simple_transforms(
 /// Third party plugins should ensure that this is used in concert with [`sync_simple_transforms`].
 pub fn propagate_transforms(
     mut root_query: Query<
-        (Entity, &Children, Ref<Transform>, &mut GlobalTransform),
+        (
+            Entity,
+            &Children,
+            Ref<Transform>,
+            &mut GlobalTransform,
+            Ref<Anchor>,
+            Ref<NodeSize>,
+        ),
         Without<Parent>,
     >,
     mut orphaned: RemovedComponents<Parent>,
-    transform_query: Query<(Ref<Transform>, &mut GlobalTransform, Option<&Children>), With<Parent>>,
+    transform_query: Query<
+        (
+            Ref<Transform>,
+            &mut GlobalTransform,
+            Ref<Anchor>,
+            Ref<NodeSize>,
+            Option<&Children>,
+        ),
+        With<Parent>,
+    >,
     parent_query: Query<(Entity, Ref<Parent>)>,
     mut orphaned_entities: Local<Vec<Entity>>,
 ) {
@@ -278,8 +306,8 @@ pub fn propagate_transforms(
     orphaned_entities.extend(orphaned.read());
     orphaned_entities.sort_unstable();
     root_query.par_iter_mut().for_each(
-        |(entity, children, transform, mut global_transform)| {
-            let changed = transform.is_changed() || global_transform.is_added() || orphaned_entities.binary_search(&entity).is_ok();
+        |(entity, children, transform, mut global_transform, anchor, node_size)| {
+            let mut changed = transform.is_changed() || global_transform.is_added() || orphaned_entities.binary_search(&entity).is_ok();
             if changed {
                 *global_transform = GlobalTransform::from(*transform);
             }
@@ -289,6 +317,9 @@ pub fn propagate_transforms(
                     actual_parent.get(), entity,
                     "Malformed hierarchy. This probably means that your hierarchy has been improperly maintained, or contains a cycle"
                 );
+
+                changed |= anchor.is_changed() || node_size.is_changed();
+
                 // SAFETY:
                 // - `child` must have consistent parentage, or the above assertion would panic.
                 // Since `child` is parented to a root entity, the entire hierarchy leading to it is consistent.
@@ -301,6 +332,8 @@ pub fn propagate_transforms(
                 unsafe {
                     propagate_recursive(
                         &global_transform,
+                        &anchor,
+                        &node_size,
                         &transform_query,
                         &parent_query,
                         child,
@@ -327,17 +360,25 @@ pub fn propagate_transforms(
 /// is well-formed and must remain as a tree or a forest. Each entity must have at most one parent.
 #[allow(unsafe_code)]
 unsafe fn propagate_recursive(
-    parent: &GlobalTransform,
+    parent_transform: &GlobalTransform,
+    parent_anchor: &Anchor,
+    parent_node_size: &NodeSize,
     transform_query: &Query<
-        (Ref<Transform>, &mut GlobalTransform, Option<&Children>),
+        (
+            Ref<Transform>,
+            &mut GlobalTransform,
+            Ref<Anchor>,
+            Ref<NodeSize>,
+            Option<&Children>,
+        ),
         With<Parent>,
     >,
     parent_query: &Query<(Entity, Ref<Parent>)>,
     entity: Entity,
     mut changed: bool,
 ) {
-    let (global_matrix, children) = {
-        let Ok((transform, mut global_transform, children)) =
+    let (global_matrix, anchor, node_size, children) = {
+        let Ok((transform, mut global_transform, anchor, node_size, children)) =
             // SAFETY: This call cannot create aliased mutable references.
             //   - The top level iteration parallelizes on the roots of the hierarchy.
             //   - The caller ensures that each child has one and only one unique parent throughout the entire
@@ -370,9 +411,12 @@ unsafe fn propagate_recursive(
 
         changed |= transform.is_changed() || global_transform.is_added();
         if changed {
-            *global_transform = parent.mul_transform(&transform);
+            *global_transform =
+                parent_transform.mul_transform(&parent_node_size, &parent_anchor, &transform);
         }
-        (*global_transform, children)
+
+        changed |= anchor.is_changed() || node_size.is_changed();
+        (*global_transform, *anchor, *node_size, children)
     };
 
     let Some(children) = children else { return };
@@ -389,6 +433,8 @@ unsafe fn propagate_recursive(
         unsafe {
             propagate_recursive(
                 &global_matrix,
+                &anchor,
+                &node_size,
                 transform_query,
                 parent_query,
                 child,

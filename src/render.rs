@@ -1,5 +1,3 @@
-use std::num::NonZeroU64;
-
 use bevy::app::Plugin;
 use bevy::asset::load_internal_asset;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
@@ -23,7 +21,7 @@ use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::sprite::Anchor;
 use bytemuck::{Pod, Zeroable};
 
-use crate::math::{BoundingBox, GlobalTransform, NodeSize, NonAxisAlignedBoundingBox};
+use crate::math::{GlobalTransform, NodeSize};
 
 #[repr(C)]
 #[derive(Pod, Zeroable, Debug, Copy, Clone, ShaderType)]
