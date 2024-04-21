@@ -27,6 +27,12 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 
     for root in roots.iter().copied() {
         egui::Window::new(format!("{root:?}")).show(context.get_mut(), |ui| {
+            if ui.button("Marshall").clicked() {
+                println!(
+                    "{:?}",
+                    bevy_layout_ui::loader::marshall_node_tree(world, root)
+                );
+            }
             let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) else {
                 return;
             };

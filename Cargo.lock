@@ -750,6 +750,7 @@ dependencies = [
  "bytemuck",
  "egui",
  "egui_dock",
+ "serde",
 ]
 
 [[package]]

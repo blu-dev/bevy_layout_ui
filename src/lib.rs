@@ -7,6 +7,7 @@ use bevy::{
 #[cfg(feature = "editor-ui")]
 pub mod editor;
 
+pub mod loader;
 pub mod math;
 pub mod render;
 

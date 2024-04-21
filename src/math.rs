@@ -125,6 +125,13 @@ impl Transform {
         }
     }
 
+    pub const fn with_parent_anchor(self, anchor: Anchor) -> Self {
+        Self {
+            parent_anchor: anchor,
+            ..self
+        }
+    }
+
     pub fn affine(&self) -> Affine2 {
         Affine2::from_scale_angle_translation(self.scale, self.rotation.to_radians(), self.position)
     }
