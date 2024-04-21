@@ -13,10 +13,6 @@ struct VertexInput {
     @location(2) i_model_col2: vec2<f32>,
 };
 
-struct ExtraVertexInput {
-    @location(3) color: vec4<f32>,
-};
-
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -25,7 +21,6 @@ struct VertexOutput {
 @vertex
 fn vertex(
     in: VertexInput,
-    extra_vertex_input: ExtraVertexInput
 ) -> VertexOutput {
     let vertex: vec2<f32> = vec2(
         f32(in.vertex_index & 0x1u),

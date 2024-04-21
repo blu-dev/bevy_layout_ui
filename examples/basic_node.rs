@@ -1,7 +1,12 @@
 use bevy::{
     asset::{load_internal_asset, LoadState},
-    ecs::query::ROQueryItem,
+    ecs::{query::ROQueryItem, system::lifetimeless::SRes},
     prelude::*,
+    render::{
+        render_phase::{AddRenderCommand, DrawFunctions, RenderCommand, RenderCommandResult},
+        render_resource::{CachedRenderPipelineId, PipelineCache},
+        Extract, Render, RenderApp, RenderSet,
+    },
     window::PrimaryWindow,
 };
 use bevy_inspector_egui::{
@@ -12,47 +17,97 @@ use bevy_layout_ui::{
     loader::Layout,
     math::NodeSize,
     render::{
-        BindLayoutUniform, BindNodePipeline, BindVertexBuffer, DrawUiPhaseItem,
-        SpecializedNodePlugin, SpecializedUiNode, UiRenderPlugin,
+        BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
+        NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
     },
-    UiLayoutPlugin,
+    PrepareUiNodes, UiLayoutPlugin,
 };
 
-pub struct BasicUiNode;
+#[derive(Component)]
+struct BasicNode;
 
-impl BasicUiNode {
-    pub const SHADER: Handle<Shader> = Handle::weak_from_u128(0xCDE15DE115FF47E796AF6C535F5AE089);
+#[derive(Resource, Default, Deref, DerefMut)]
+pub struct ExtractedBasicNodes(Vec<Entity>);
+
+fn extract_basic_nodes(
+    nodes: Extract<Query<Entity, (With<BasicNode>, Without<SkipNodeRender>)>>,
+    mut basic_nodes: ResMut<ExtractedBasicNodes>,
+) {
+    basic_nodes.clear();
+    basic_nodes.extend(nodes.iter());
 }
 
-impl SpecializedUiNode for BasicUiNode {
-    type DrawFunction = (
-        BindNodePipeline<BasicUiNode>,
-        BindLayoutUniform<0>,
-        BindVertexBuffer<0>,
-        DrawUiPhaseItem,
-    );
-    type QueryData = ();
-    type Extracted = ();
+#[derive(Resource)]
+struct BasicPipeline {
+    cached_pipeline_id: CachedRenderPipelineId,
+}
 
-    fn extract(_: ROQueryItem<Self::QueryData>) -> Self::Extracted {
-        ()
+impl BasicPipeline {
+    const SHADER: Handle<Shader> = Handle::weak_from_u128(0xCD054AA00730470D83527C8FC4288912);
+}
+
+impl FromWorld for BasicPipeline {
+    fn from_world(world: &mut World) -> Self {
+        let invalid_pipeline = world.resource::<InvalidNodePipeline>();
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let mut descriptor = invalid_pipeline.render_pipeline_descriptor();
+        descriptor.vertex.shader = Self::SHADER.clone();
+        descriptor.fragment.as_mut().unwrap().shader = Self::SHADER.clone();
+
+        Self {
+            cached_pipeline_id: pipeline_cache.queue_render_pipeline(descriptor),
+        }
+    }
+}
+
+type BasicDrawFunction = (
+    BindVertexBuffer<0>,
+    BindLayoutUniform<0>,
+    BindBasicPipeline,
+    DrawUiPhaseItem,
+);
+
+struct BindBasicPipeline;
+
+impl RenderCommand<UiNodeItem> for BindBasicPipeline {
+    type Param = (SRes<BasicPipeline>, SRes<PipelineCache>);
+    type ItemQuery = ();
+    type ViewQuery = ();
+
+    fn render<'w>(
+        _item: &UiNodeItem,
+        _view: ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
+        (pipeline, cache): bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
+    ) -> bevy::render::render_phase::RenderCommandResult {
+        let pipeline = pipeline.into_inner();
+        let cache = cache.into_inner();
+
+        let Some(pipeline) = cache.get_render_pipeline(pipeline.cached_pipeline_id) else {
+            return RenderCommandResult::Failure;
+        };
+
+        pass.set_render_pipeline(pipeline);
+
+        RenderCommandResult::Success
+    }
+}
+
+fn prepare_basic_nodes(
+    mut commands: Commands,
+    nodes: Res<ExtractedBasicNodes>,
+    draw_functions: Res<DrawFunctions<UiNodeItem>>,
+    mut batch: Local<Vec<(Entity, NodeDrawFunction)>>,
+) {
+    let function = draw_functions.read().get_id::<BasicDrawFunction>().unwrap();
+
+    for node in nodes.iter() {
+        batch.push((*node, NodeDrawFunction::new(function)));
     }
 
-    fn vertex_shader() -> Handle<Shader> {
-        Self::SHADER.clone()
-    }
-
-    fn fragment_shader() -> Handle<Shader> {
-        Self::SHADER.clone()
-    }
-
-    fn fragment_shader_entrypoint() -> &'static str {
-        "fragment"
-    }
-
-    fn vertex_shader_entrypoint() -> &'static str {
-        "vertex"
-    }
+    let new_batch = Vec::with_capacity(batch.len());
+    commands.insert_or_spawn_batch(std::mem::replace(&mut *batch, new_batch));
 }
 
 #[derive(Resource)]
@@ -76,6 +131,12 @@ fn wait_spawn_layout(layout: Res<WaitingLayout>, server: Res<AssetServer>, mut c
                 let layout = assets.get(&handle).unwrap();
                 bevy_layout_ui::loader::spawn_layout(world, layout);
             });
+
+            let entities =
+                Vec::from_iter(world.query_filtered::<Entity, With<NodeSize>>().iter(world));
+            for entity in entities {
+                world.entity_mut(entity).insert(BasicNode);
+            }
         });
     }
 }
@@ -122,6 +183,27 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
     }
 }
 
+struct BasicPlugin;
+
+impl Plugin for BasicPlugin {
+    fn build(&self, app: &mut App) {}
+
+    fn finish(&self, app: &mut App) {
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app
+            .init_resource::<ExtractedBasicNodes>()
+            .init_resource::<BasicPipeline>()
+            .add_render_command::<UiNodeItem, BasicDrawFunction>()
+            .add_systems(ExtractSchedule, extract_basic_nodes)
+            .add_systems(
+                Render,
+                prepare_basic_nodes
+                    .in_set(RenderSet::Prepare)
+                    .before(PrepareUiNodes),
+            );
+    }
+}
+
 pub fn main() {
     let mut app = App::new();
 
@@ -129,16 +211,21 @@ pub fn main() {
 
     load_internal_asset!(
         app,
-        BasicUiNode::SHADER,
+        BasicPipeline::SHADER,
         "shaders/basic.wgsl",
         Shader::from_wgsl
     );
 
+    println!(
+        "{}",
+        std::any::type_name::<<BasicDrawFunction as RenderCommand<UiNodeItem>>::ViewQuery>()
+    );
+
     app.add_plugins(UiLayoutPlugin)
         .add_plugins(UiRenderPlugin)
-        .add_plugins(SpecializedNodePlugin::<BasicUiNode>::default())
         .add_plugins(EguiPlugin)
         .add_plugins(DefaultInspectorConfigPlugin)
+        .add_plugins(BasicPlugin)
         .add_systems(
             Update,
             (
