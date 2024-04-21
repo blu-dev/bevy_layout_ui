@@ -3,7 +3,6 @@ use bevy::{
     ecs::schedule::SystemSet,
     prelude::*,
 };
-use math::ZIndex;
 
 #[cfg(feature = "editor-ui")]
 pub mod editor;

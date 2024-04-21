@@ -80,10 +80,7 @@ pub fn display_node_tree(
             );
         }
     }
-    let mut tracker = DragTracker {
-        has_checked_above: false,
-        location: None,
-    };
+    let mut tracker = DragTracker { location: None };
 
     let resp = display_node_tree_impl(root_entity, world, ui, &mut commands, root_id, &mut tracker);
 
@@ -151,8 +148,6 @@ fn get_dragging_entity(ctx: &Context, id: egui::Id) -> Option<Entity> {
 }
 
 struct DragTracker {
-    /// Whether or not we have checked at least one node by now. If this is false, the cursor is above your node, then it's going to be moved to the very tippy top
-    has_checked_above: bool,
     /// The location of the child
     location: Option<(Entity, usize)>,
 }
