@@ -195,6 +195,7 @@ fn display_node_tree_impl(
                 } else {
                     None
                 };
+
                 if dragging.is_some() && tracker.location.is_none() {
                     if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
                         if hover_pos.y < ui.cursor().min.y {
@@ -220,7 +221,7 @@ fn display_node_tree_impl(
                                     Anchor::TopLeft,
                                     NodeSize(Vec2::splat(50.0)),
                                     UiNodeSettings {
-                                        target_resolution: UVec2::new(960, 540),
+                                        target_resolution: UVec2::new(1920, 1080),
                                     },
                                     ZIndex(2),
                                 ))

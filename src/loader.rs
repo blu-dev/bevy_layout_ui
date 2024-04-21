@@ -1,4 +1,5 @@
 use bevy::{
+    asset::{Asset, AssetLoader, AsyncReadExt},
     ecs::{entity::Entity, world::World},
     hierarchy::{BuildWorldChildren, Children, Parent},
     math::{UVec2, Vec2},
@@ -6,11 +7,46 @@ use bevy::{
     sprite::Anchor,
 };
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::UiNodeSettings,
 };
+
+#[derive(Default)]
+pub struct LayoutAssetLoader;
+
+#[derive(Error, Debug)]
+pub enum LayoutAssetLoaderError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    JSON(#[from] serde_json::Error),
+}
+
+impl AssetLoader for LayoutAssetLoader {
+    type Asset = Layout;
+    type Error = LayoutAssetLoaderError;
+    type Settings = ();
+
+    fn extensions(&self) -> &[&str] {
+        &["layout.json"]
+    }
+
+    fn load<'a>(
+        &'a self,
+        reader: &'a mut bevy::asset::io::Reader,
+        settings: &'a Self::Settings,
+        load_context: &'a mut bevy::asset::LoadContext,
+    ) -> bevy::utils::BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
+        Box::pin(async move {
+            let mut bytes = vec![];
+            reader.read_to_end(&mut bytes).await?;
+            serde_json::from_slice(&bytes).map_err(LayoutAssetLoaderError::from)
+        })
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(remote = "bevy::sprite::Anchor")]
@@ -41,7 +77,7 @@ pub struct UiNode {
     pub children: Vec<UiNode>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
+#[derive(Deserialize, Serialize, Debug, Clone, Reflect, Asset)]
 pub struct Layout {
     pub resolution: UVec2,
     pub nodes: Vec<UiNode>,

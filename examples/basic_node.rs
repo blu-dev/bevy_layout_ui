@@ -1,13 +1,34 @@
-use bevy::{prelude::*, sprite::Anchor, window::PrimaryWindow};
+use bevy::{asset::LoadState, prelude::*, window::PrimaryWindow};
 use bevy_inspector_egui::{
     bevy_egui::{EguiContext, EguiPlugin},
     DefaultInspectorConfigPlugin,
 };
-use bevy_layout_ui::{
-    math::{GlobalTransform, NodeSize, Transform, ZIndex},
-    render::{UiNodeSettings, UiRenderPlugin},
-    UiLayoutPlugin,
-};
+use bevy_layout_ui::{loader::Layout, math::NodeSize, render::UiRenderPlugin, UiLayoutPlugin};
+
+#[derive(Resource)]
+struct WaitingLayout(Handle<Layout>);
+
+impl FromWorld for WaitingLayout {
+    fn from_world(world: &mut World) -> Self {
+        Self(
+            world
+                .resource::<AssetServer>()
+                .load("basic_node.layout.json"),
+        )
+    }
+}
+
+fn wait_spawn_layout(layout: Res<WaitingLayout>, server: Res<AssetServer>, mut commands: Commands) {
+    if server.load_state(layout.0.id()) == LoadState::Loaded {
+        commands.add(|world: &mut World| {
+            let handle = world.remove_resource::<WaitingLayout>().unwrap().0;
+            world.resource_scope::<Assets<Layout>, _>(|world, assets| {
+                let layout = assets.get(&handle).unwrap();
+                bevy_layout_ui::loader::spawn_layout(world, layout);
+            });
+        });
+    }
+}
 
 fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: Local<Vec<Entity>>) {
     let Ok(mut context) = world
@@ -28,10 +49,11 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
     for root in roots.iter().copied() {
         egui::Window::new(format!("{root:?}")).show(context.get_mut(), |ui| {
             if ui.button("Marshall").clicked() {
-                println!(
-                    "{:?}",
-                    bevy_layout_ui::loader::marshall_node_tree(world, root)
-                );
+                let tree = bevy_layout_ui::loader::marshall_node_tree(world, root);
+                println!("{tree:?}",);
+
+                let json = serde_json::to_string_pretty(&tree).unwrap();
+                std::fs::write("assets/basic_node.layout.json", &json).unwrap();
             }
             let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) else {
                 return;
@@ -58,32 +80,16 @@ pub fn main() {
         .add_plugins(UiRenderPlugin)
         .add_plugins(EguiPlugin)
         .add_plugins(DefaultInspectorConfigPlugin)
-        .add_systems(Update, ui_system);
+        .add_systems(
+            Update,
+            (
+                wait_spawn_layout.run_if(resource_exists::<WaitingLayout>),
+                ui_system,
+            ),
+        )
+        .init_resource::<WaitingLayout>();
 
     app.world.spawn(Camera2dBundle::default());
-    app.world
-        .spawn((
-            Transform::from_xy(150.0, 150.0),
-            GlobalTransform::default(),
-            NodeSize(Vec2::splat(300.0)),
-            Anchor::Center,
-            UiNodeSettings {
-                target_resolution: UVec2::new(960, 540),
-            },
-            ZIndex(0),
-        ))
-        .with_children(|children| {
-            children.spawn((
-                Transform::from_xy(50.0, 50.0),
-                GlobalTransform::default(),
-                NodeSize(Vec2::splat(20.0)),
-                Anchor::BottomRight,
-                UiNodeSettings {
-                    target_resolution: UVec2::new(960, 540),
-                },
-                ZIndex(1),
-            ));
-        });
 
     app.run();
 }

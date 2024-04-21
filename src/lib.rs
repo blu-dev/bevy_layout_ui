@@ -3,6 +3,7 @@ use bevy::{
     ecs::schedule::SystemSet,
     prelude::*,
 };
+use loader::{Layout, LayoutAssetLoader};
 
 #[cfg(feature = "editor-ui")]
 pub mod editor;
@@ -40,11 +41,15 @@ impl Plugin for UiLayoutPlugin {
             ),
         );
 
-        app.register_type::<math::Transform>()
+        app.init_asset_loader::<LayoutAssetLoader>()
+            .init_asset::<Layout>()
+            .register_type::<math::Transform>()
             .register_type::<math::GlobalTransform>()
             .register_type::<math::BoundingBox>()
             .register_type::<math::NonAxisAlignedBoundingBox>()
             .register_type::<math::NodeSize>()
-            .register_type::<render::UiNodeSettings>();
+            .register_type::<render::UiNodeSettings>()
+            .register_type::<loader::UiNode>()
+            .register_type::<loader::Layout>();
     }
 }
