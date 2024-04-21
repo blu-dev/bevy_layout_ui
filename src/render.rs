@@ -22,7 +22,7 @@ use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::sprite::Anchor;
 use bevy::utils::HashMap;
 
-use crate::math::{GlobalTransform, NodeSize};
+use crate::math::{GlobalTransform, NodeSize, ZIndex};
 
 #[derive(Component, Debug, Copy, Clone, Reflect)]
 pub struct UiNodeSettings {
@@ -119,6 +119,7 @@ pub struct UiLayoutNode;
 pub struct ExtractedNode {
     pub target_size: UVec2,
     pub affine: Affine2,
+    pub z_index: isize,
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -141,12 +142,13 @@ pub fn extract_nodes(
             &NodeSize,
             &Anchor,
             &UiNodeSettings,
+            &ZIndex,
         )>,
     >,
     mut extracted_nodes: ResMut<ExtractedNodes>,
 ) {
     extracted_nodes.clear();
-    for (entity, transform, node_size, anchor, settings) in nodes.iter() {
+    for (entity, transform, node_size, anchor, settings, z_index) in nodes.iter() {
         let mut affine = transform.affine();
         affine = affine
             * Affine2::from_mat2_translation(
@@ -158,6 +160,7 @@ pub fn extract_nodes(
             ExtractedNode {
                 target_size: settings.target_resolution,
                 affine,
+                z_index: z_index.0,
             },
         );
     }
@@ -170,7 +173,7 @@ pub struct PreparedResources {
     pub uniform_buffer: DynamicUniformBuffer<LayoutUniform>,
     pub bind_group: Option<BindGroup>,
     pub offsets: HashMap<UVec2, u32>,
-    pub queued_nodes: Vec<u32>,
+    pub queued_nodes: Vec<(isize, u32, u32)>,
 }
 
 impl Default for PreparedResources {
@@ -220,7 +223,11 @@ pub fn prepare_extracted_nodes(
                 .push(extracted.affine.to_cols_array_2d());
 
             match resources.offsets.get(&extracted.target_size) {
-                Some(offset) => resources.queued_nodes.push(*offset),
+                Some(offset) => resources.queued_nodes.push((
+                    extracted.z_index,
+                    resources.vertex_buffer.len() as u32 - 1,
+                    *offset,
+                )),
                 None => {
                     let matrix = Mat3::from_scale_angle_translation(
                         Vec2::new(
@@ -243,7 +250,11 @@ pub fn prepare_extracted_nodes(
                     });
 
                     resources.offsets.insert(extracted.target_size, offset);
-                    resources.queued_nodes.push(offset);
+                    resources.queued_nodes.push((
+                        extracted.z_index,
+                        resources.vertex_buffer.len() as u32 - 1,
+                        offset,
+                    ));
                 }
             }
         }
@@ -252,6 +263,10 @@ pub fn prepare_extracted_nodes(
             .vertex_buffer
             .write_buffer(&render_device, &render_queue);
     }
+
+    resources
+        .queued_nodes
+        .sort_unstable_by_key(|(index, _, _)| *index);
 
     resources.bind_group = Some(render_device.create_bind_group(
         "view_uniform_bind_group",
@@ -310,9 +325,9 @@ impl ViewNode for UiLayoutNode {
                 *resources.index_buffer.buffer().unwrap().slice(..),
                 IndexFormat::Uint32,
             );
-            for (idx, draw) in resources.queued_nodes.iter().enumerate() {
+            for (_, idx, draw) in resources.queued_nodes.iter() {
                 rpass.set_bind_group(0, resources.bind_group.as_ref().unwrap(), &[*draw]);
-                rpass.draw_indexed(0..6, 0, idx as u32..(idx + 1) as u32);
+                rpass.draw_indexed(0..6, 0, *idx..*idx + 1);
             }
         }
 

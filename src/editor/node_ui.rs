@@ -4,7 +4,7 @@ use bevy::{
 };
 use egui::DragValue;
 
-use crate::math::{NodeSize, Transform};
+use crate::math::{NodeSize, Transform, ZIndex};
 
 pub fn display_ui_node_editor(node: Entity, world: &mut World, ui: &mut egui::Ui) {
     let mut entity = world.entity_mut(node);
@@ -78,5 +78,11 @@ pub fn display_ui_node_editor(node: Entity, world: &mut World, ui: &mut egui::Ui
             ui.add(DragValue::new(&mut size.x));
             ui.add(DragValue::new(&mut size.y));
         });
+    });
+
+    let mut z_index = entity.get_mut::<ZIndex>().unwrap();
+    ui.horizontal(|ui| {
+        ui.label("Z Index");
+        ui.add(DragValue::new(&mut z_index.0));
     });
 }

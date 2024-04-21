@@ -2,6 +2,9 @@
 
 use bevy::{ecs::query::QueryData, math::Affine2, prelude::*, sprite::Anchor};
 
+#[derive(Component, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Reflect)]
+pub struct ZIndex(pub isize);
+
 #[derive(Debug, Copy, Clone, Component, Reflect, Deref, DerefMut)]
 pub struct NodeSize(pub Vec2);
 

@@ -3,6 +3,7 @@ use bevy::{
     ecs::schedule::SystemSet,
     prelude::*,
 };
+use math::ZIndex;
 
 #[cfg(feature = "editor-ui")]
 pub mod editor;
@@ -12,6 +13,7 @@ pub mod render;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SystemSet)]
 pub enum UiLayoutSystem {
+    UpdateZIndex,
     PropagateTransforms,
     ComputeBoundingBoxes,
 }

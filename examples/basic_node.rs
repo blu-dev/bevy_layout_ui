@@ -4,7 +4,7 @@ use bevy_inspector_egui::{
     DefaultInspectorConfigPlugin,
 };
 use bevy_layout_ui::{
-    math::{GlobalTransform, NodeSize, Transform},
+    math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{UiNodeSettings, UiRenderPlugin},
     UiLayoutPlugin,
 };
@@ -64,6 +64,7 @@ pub fn main() {
             UiNodeSettings {
                 target_resolution: UVec2::new(960, 540),
             },
+            ZIndex(0),
         ))
         .with_children(|children| {
             children.spawn((
@@ -74,6 +75,7 @@ pub fn main() {
                 UiNodeSettings {
                     target_resolution: UVec2::new(960, 540),
                 },
+                ZIndex(1),
             ));
         });
 
