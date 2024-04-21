@@ -1,9 +1,59 @@
-use bevy::{asset::LoadState, prelude::*, window::PrimaryWindow};
+use bevy::{
+    asset::{load_internal_asset, LoadState},
+    ecs::query::ROQueryItem,
+    prelude::*,
+    window::PrimaryWindow,
+};
 use bevy_inspector_egui::{
     bevy_egui::{EguiContext, EguiPlugin},
     DefaultInspectorConfigPlugin,
 };
-use bevy_layout_ui::{loader::Layout, math::NodeSize, render::UiRenderPlugin, UiLayoutPlugin};
+use bevy_layout_ui::{
+    loader::Layout,
+    math::NodeSize,
+    render::{
+        BindLayoutUniform, BindNodePipeline, BindVertexBuffer, DrawUiPhaseItem,
+        SpecializedNodePlugin, SpecializedUiNode, UiRenderPlugin,
+    },
+    UiLayoutPlugin,
+};
+
+pub struct BasicUiNode;
+
+impl BasicUiNode {
+    pub const SHADER: Handle<Shader> = Handle::weak_from_u128(0xCDE15DE115FF47E796AF6C535F5AE089);
+}
+
+impl SpecializedUiNode for BasicUiNode {
+    type DrawFunction = (
+        BindNodePipeline<BasicUiNode>,
+        BindLayoutUniform<0>,
+        BindVertexBuffer<0>,
+        DrawUiPhaseItem,
+    );
+    type QueryData = ();
+    type Extracted = ();
+
+    fn extract(_: ROQueryItem<Self::QueryData>) -> Self::Extracted {
+        ()
+    }
+
+    fn vertex_shader() -> Handle<Shader> {
+        Self::SHADER.clone()
+    }
+
+    fn fragment_shader() -> Handle<Shader> {
+        Self::SHADER.clone()
+    }
+
+    fn fragment_shader_entrypoint() -> &'static str {
+        "fragment"
+    }
+
+    fn vertex_shader_entrypoint() -> &'static str {
+        "vertex"
+    }
+}
 
 #[derive(Resource)]
 struct WaitingLayout(Handle<Layout>);
@@ -75,9 +125,18 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 pub fn main() {
     let mut app = App::new();
 
-    app.add_plugins(DefaultPlugins)
-        .add_plugins(UiLayoutPlugin)
+    app.add_plugins(DefaultPlugins);
+
+    load_internal_asset!(
+        app,
+        BasicUiNode::SHADER,
+        "shaders/basic.wgsl",
+        Shader::from_wgsl
+    );
+
+    app.add_plugins(UiLayoutPlugin)
         .add_plugins(UiRenderPlugin)
+        .add_plugins(SpecializedNodePlugin::<BasicUiNode>::default())
         .add_plugins(EguiPlugin)
         .add_plugins(DefaultInspectorConfigPlugin)
         .add_systems(

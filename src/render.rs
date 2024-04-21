@@ -1,12 +1,12 @@
+use std::marker::PhantomData;
 use std::ops::Range;
 
 use bevy::app::Plugin;
-use bevy::asset::load_internal_asset;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::entity::{EntityHash, EntityHashMap};
-use bevy::ecs::query::ROQueryItem;
+use bevy::ecs::query::{QueryData, ROQueryItem};
 use bevy::ecs::system::lifetimeless::SRes;
-use bevy::ecs::system::SystemParamItem;
+use bevy::ecs::system::{ReadOnlySystemParam, SystemParamItem};
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
@@ -21,8 +21,8 @@ use bevy::render::render_resource::{
     ColorTargetState, ColorWrites, DynamicUniformBuffer, FragmentState, FrontFace, IndexFormat,
     LoadOp, MultisampleState, Operations, PipelineCache, PolygonMode, PrimitiveState,
     RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
-    ShaderType, StoreOp, TextureFormat, VertexBufferLayout, VertexFormat, VertexState,
-    VertexStepMode,
+    ShaderType, StoreOp, TextureFormat, VertexAttribute, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::BevyDefault;
@@ -33,6 +33,32 @@ use bevy::utils::nonmax::NonMaxU32;
 use bevy::utils::HashMap;
 
 use crate::math::{GlobalTransform, NodeSize, ZIndex};
+
+/// This trait can be used to extend the node system for your own custom implemented nodes
+///
+/// All "first-class" nodes (image nodes, text nodes, etc.) should be implemented this way as well.
+///
+/// The node rendering systems will configure a vertex buffer that contains the following vertex:
+/// ```
+/// struct VertexInput {
+///     @location(0) i_model_col0: vec2<f32>,
+///     @location(1) i_model_col1: vec2<f32>,
+///     @location(2) i_model_col2: vec2<f32>,
+/// };
+/// ```
+///
+/// Additional vertex buffers can be specified in this trait implementation.
+pub trait SpecializedUiNode: 'static {
+    type DrawFunction: RenderCommand<UiPhaseItem> + Send + Sync + 'static;
+    type Extracted: Send + Sync + 'static;
+    type QueryData: QueryData;
+
+    fn extract(data: ROQueryItem<Self::QueryData>) -> Self::Extracted;
+    fn vertex_shader() -> Handle<Shader>;
+    fn vertex_shader_entrypoint() -> &'static str;
+    fn fragment_shader() -> Handle<Shader>;
+    fn fragment_shader_entrypoint() -> &'static str;
+}
 
 #[derive(Debug, Clone)]
 pub struct UiPhaseItem {
@@ -88,17 +114,17 @@ pub struct LayoutUniform {
 
 pub struct UiRenderPlugin;
 
+unsafe impl<T: SpecializedUiNode> Send for UiNodePipeline<T> {}
+unsafe impl<T: SpecializedUiNode> Sync for UiNodePipeline<T> {}
+
 #[derive(Resource)]
-pub struct UiNodePipeline {
+pub struct UiNodePipeline<T: SpecializedUiNode> {
     pub bind_group_layout: BindGroupLayout,
     pub pipeline_id: CachedRenderPipelineId,
+    _phantom: PhantomData<T>,
 }
 
-impl UiNodePipeline {
-    pub const SHADER: Handle<Shader> = Handle::weak_from_u128(0xCDE15DE115FF47E796AF6C535F5AE089);
-}
-
-impl FromWorld for UiNodePipeline {
+impl<T: SpecializedUiNode> FromWorld for UiNodePipeline<T> {
     fn from_world(world: &mut World) -> Self {
         let pipeline_cache = world.resource::<PipelineCache>();
         let render_device = world.resource::<RenderDevice>();
@@ -122,13 +148,24 @@ impl FromWorld for UiNodePipeline {
             layout: vec![bind_group.clone()],
             push_constant_ranges: vec![],
             vertex: VertexState {
-                shader: Self::SHADER.clone(),
+                shader: T::vertex_shader(),
                 shader_defs: vec![],
-                entry_point: "vertex".into(),
-                buffers: vec![VertexBufferLayout::from_vertex_formats(
-                    VertexStepMode::Instance,
-                    [VertexFormat::Float32x2; 3],
-                )],
+                entry_point: T::vertex_shader_entrypoint().into(),
+                buffers: vec![
+                    VertexBufferLayout::from_vertex_formats(
+                        VertexStepMode::Instance,
+                        [VertexFormat::Float32x2; 3],
+                    ),
+                    VertexBufferLayout {
+                        array_stride: VertexFormat::Float32x4.size(),
+                        step_mode: VertexStepMode::Instance,
+                        attributes: vec![VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 0,
+                            shader_location: 3,
+                        }],
+                    },
+                ],
             },
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleList,
@@ -146,9 +183,9 @@ impl FromWorld for UiNodePipeline {
                 alpha_to_coverage_enabled: false,
             },
             fragment: Some(FragmentState {
-                shader: Self::SHADER.clone(),
+                shader: T::fragment_shader(),
                 shader_defs: vec![],
-                entry_point: "fragment".into(),
+                entry_point: T::fragment_shader_entrypoint().into(),
                 targets: vec![Some(ColorTargetState {
                     format: TextureFormat::bevy_default(),
                     blend: Some(BlendState::ALPHA_BLENDING),
@@ -160,6 +197,7 @@ impl FromWorld for UiNodePipeline {
         Self {
             bind_group_layout: bind_group,
             pipeline_id,
+            _phantom: PhantomData,
         }
     }
 }
@@ -167,16 +205,17 @@ impl FromWorld for UiNodePipeline {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RenderLabel, Default)]
 pub struct UiLayoutNode;
 
-pub struct ExtractedNode {
+pub struct ExtractedNode<T: SpecializedUiNode> {
     pub target_size: UVec2,
     pub affine: Affine2,
     pub z_index: isize,
+    pub extracted: T::Extracted,
 }
 
 #[derive(Resource, Deref, DerefMut)]
-pub struct ExtractedNodes(EntityHashMap<ExtractedNode>);
+pub struct ExtractedNodes<T: SpecializedUiNode>(EntityHashMap<ExtractedNode<T>>);
 
-impl Default for ExtractedNodes {
+impl<T: SpecializedUiNode> Default for ExtractedNodes<T> {
     fn default() -> Self {
         Self(EntityHashMap::with_capacity_and_hasher(
             128,
@@ -185,7 +224,7 @@ impl Default for ExtractedNodes {
     }
 }
 
-pub fn extract_nodes(
+pub fn extract_nodes<T: SpecializedUiNode>(
     nodes: Extract<
         Query<(
             Entity,
@@ -194,12 +233,13 @@ pub fn extract_nodes(
             &Anchor,
             &UiNodeSettings,
             &ZIndex,
+            <T::QueryData as QueryData>::ReadOnly,
         )>,
     >,
-    mut extracted_nodes: ResMut<ExtractedNodes>,
+    mut extracted_nodes: ResMut<ExtractedNodes<T>>,
 ) {
     extracted_nodes.clear();
-    for (entity, transform, node_size, anchor, settings, z_index) in nodes.iter() {
+    for (entity, transform, node_size, anchor, settings, z_index, extracted) in nodes.iter() {
         let mut affine = transform.affine();
         affine = affine
             * Affine2::from_mat2_translation(
@@ -212,6 +252,7 @@ pub fn extract_nodes(
                 target_size: settings.target_resolution,
                 affine,
                 z_index: z_index.0,
+                extracted: T::extract(extracted),
             },
         );
     }
@@ -251,15 +292,12 @@ impl Default for PreparedResources {
     }
 }
 
-pub fn queue_ui_nodes(
+pub fn queue_ui_nodes<T: SpecializedUiNode>(
     draw_functions: Res<DrawFunctions<UiPhaseItem>>,
     mut ui_phases: Query<&mut RenderPhase<UiPhaseItem>>,
-    nodes: Res<ExtractedNodes>,
+    nodes: Res<ExtractedNodes<T>>,
 ) {
-    let function = draw_functions
-        .read()
-        .get_id::<BasicNodeDrawFunction>()
-        .unwrap();
+    let function = draw_functions.read().get_id::<T::DrawFunction>().unwrap();
     for mut phase in ui_phases.iter_mut() {
         for (entity, node) in nodes.iter() {
             phase.items.push(UiPhaseItem {
@@ -274,13 +312,13 @@ pub fn queue_ui_nodes(
     }
 }
 
-pub fn prepare_ui_nodes(
+pub fn prepare_ui_nodes<T: SpecializedUiNode>(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    pipeline: Res<UiNodePipeline>,
+    pipeline: Res<UiNodePipeline<T>>,
     resources: ResMut<PreparedResources>,
-    extracted_nodes: Res<ExtractedNodes>,
+    extracted_nodes: Res<ExtractedNodes<T>>,
     mut ui_phases: Query<&mut RenderPhase<UiPhaseItem>>,
 ) {
     let resources = resources.into_inner();
@@ -363,8 +401,30 @@ pub fn prepare_ui_nodes(
 pub struct BindLayoutUniform<const I: usize>;
 pub struct BindVertexBuffer<const I: usize>;
 pub struct DrawUiPhaseItem;
+pub struct BindNodePipeline<T: SpecializedUiNode>(PhantomData<T>);
 
-pub type BasicNodeDrawFunction = (BindLayoutUniform<0>, BindVertexBuffer<0>, DrawUiPhaseItem);
+impl<T: SpecializedUiNode> RenderCommand<UiPhaseItem> for BindNodePipeline<T> {
+    type Param = (SRes<UiNodePipeline<T>>, SRes<PipelineCache>);
+    type ItemQuery = ();
+    type ViewQuery = ();
+
+    fn render<'w>(
+        _item: &UiPhaseItem,
+        _view: ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
+        (pipeline, cache): SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let pipeline = pipeline.into_inner();
+        let cache = cache.into_inner();
+        let Some(pipeline) = cache.get_render_pipeline(pipeline.pipeline_id) else {
+            return RenderCommandResult::Failure;
+        };
+
+        pass.set_render_pipeline(pipeline);
+        RenderCommandResult::Success
+    }
+}
 
 impl<const I: usize> RenderCommand<UiPhaseItem> for BindLayoutUniform<I> {
     type Param = SRes<PreparedResources>;
@@ -404,6 +464,7 @@ impl<const I: usize> RenderCommand<UiPhaseItem> for BindVertexBuffer<I> {
         let param = param.into_inner();
 
         pass.set_vertex_buffer(I, param.vertex_buffer.buffer().unwrap().slice(..));
+        pass.set_vertex_buffer(1, param.vertex_buffer.buffer().unwrap().slice(..));
         pass.set_index_buffer(
             param.index_buffer.buffer().unwrap().slice(..),
             0,
@@ -441,20 +502,14 @@ impl ViewNode for UiLayoutNode {
         (target, phase): bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), bevy::render::render_graph::NodeRunError> {
-        let pipeline_cache = world.resource::<PipelineCache>();
         let draw_functions = world.resource::<DrawFunctions<UiPhaseItem>>();
-        let Some(pipeline) =
-            pipeline_cache.get_render_pipeline(world.resource::<UiNodePipeline>().pipeline_id)
-        else {
-            return Ok(());
-        };
 
         let device = render_context.render_device().clone();
         let encoder = render_context.command_encoder();
         encoder.push_debug_group("UiLayoutNode");
 
         {
-            let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
+            let rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("UiLayoutNode.rpass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: target.main_texture_view(),
@@ -469,7 +524,6 @@ impl ViewNode for UiLayoutNode {
                 occlusion_query_set: None,
             });
 
-            rpass.set_pipeline(pipeline);
             let mut pass = TrackedRenderPass::new(&device, rpass);
 
             let mut draw_functions = draw_functions.write();
@@ -485,15 +539,54 @@ impl ViewNode for UiLayoutNode {
     }
 }
 
+pub struct SpecializedNodePlugin<T: SpecializedUiNode>(PhantomData<T>)
+where
+    <T::DrawFunction as RenderCommand<UiPhaseItem>>::Param: ReadOnlySystemParam;
+
+unsafe impl<T: SpecializedUiNode> Send for SpecializedNodePlugin<T> where
+    <T::DrawFunction as RenderCommand<UiPhaseItem>>::Param: ReadOnlySystemParam
+{
+}
+unsafe impl<T: SpecializedUiNode> Sync for SpecializedNodePlugin<T> where
+    <T::DrawFunction as RenderCommand<UiPhaseItem>>::Param: ReadOnlySystemParam
+{
+}
+
+impl<T: SpecializedUiNode> Default for SpecializedNodePlugin<T>
+where
+    <T::DrawFunction as RenderCommand<UiPhaseItem>>::Param: ReadOnlySystemParam,
+{
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: SpecializedUiNode> Plugin for SpecializedNodePlugin<T>
+where
+    <T::DrawFunction as RenderCommand<UiPhaseItem>>::Param: ReadOnlySystemParam,
+{
+    fn build(&self, _: &mut App) {}
+
+    fn finish(&self, app: &mut App) {
+        let render_app = app.sub_app_mut(RenderApp);
+
+        render_app
+            .init_resource::<UiNodePipeline<T>>()
+            .init_resource::<ExtractedNodes<T>>()
+            .add_render_command::<UiPhaseItem, T::DrawFunction>()
+            .add_systems(ExtractSchedule, extract_nodes::<T>)
+            .add_systems(
+                Render,
+                (
+                    queue_ui_nodes::<T>.in_set(RenderSet::Queue),
+                    prepare_ui_nodes::<T>.in_set(RenderSet::Prepare),
+                ),
+            );
+    }
+}
+
 impl Plugin for UiRenderPlugin {
     fn build(&self, app: &mut App) {
-        load_internal_asset!(
-            app,
-            UiNodePipeline::SHADER,
-            "shaders/basic.wgsl",
-            Shader::from_wgsl
-        );
-
         let render_app = app.sub_app_mut(RenderApp);
         render_app
             .add_render_graph_node::<ViewNodeRunner<UiLayoutNode>>(Core2d, UiLayoutNode)
@@ -512,17 +605,7 @@ impl Plugin for UiRenderPlugin {
 
         render_app
             .init_resource::<PreparedResources>()
-            .init_resource::<UiNodePipeline>()
-            .init_resource::<ExtractedNodes>()
             .init_resource::<DrawFunctions<UiPhaseItem>>()
-            .add_render_command::<UiPhaseItem, BasicNodeDrawFunction>()
-            .add_systems(ExtractSchedule, (extract_nodes, extract_ui_phases))
-            .add_systems(
-                Render,
-                (
-                    prepare_ui_nodes.in_set(RenderSet::Prepare),
-                    queue_ui_nodes.in_set(RenderSet::Queue),
-                ),
-            );
+            .add_systems(ExtractSchedule, extract_ui_phases);
     }
 }
