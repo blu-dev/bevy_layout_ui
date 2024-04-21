@@ -1,11 +1,20 @@
+use std::ops::Range;
+
 use bevy::app::Plugin;
 use bevy::asset::load_internal_asset;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::entity::{EntityHash, EntityHashMap};
+use bevy::ecs::query::ROQueryItem;
+use bevy::ecs::system::lifetimeless::SRes;
+use bevy::ecs::system::SystemParamItem;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_graph::{RenderGraphApp, RenderLabel, ViewNode, ViewNodeRunner};
+use bevy::render::render_phase::{
+    AddRenderCommand, DrawFunctionId, DrawFunctions, PhaseItem, RenderCommand, RenderCommandResult,
+    RenderPhase, TrackedRenderPass,
+};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
     BlendState, BufferBinding, BufferBindingType, BufferUsages, BufferVec, CachedRenderPipelineId,
@@ -20,9 +29,51 @@ use bevy::render::texture::BevyDefault;
 use bevy::render::view::ViewTarget;
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::sprite::Anchor;
+use bevy::utils::nonmax::NonMaxU32;
 use bevy::utils::HashMap;
 
 use crate::math::{GlobalTransform, NodeSize, ZIndex};
+
+#[derive(Debug, Clone)]
+pub struct UiPhaseItem {
+    entity: Entity,
+    z_index: isize,
+    draw_function_id: DrawFunctionId,
+    batch_range: Range<u32>,
+    dynamic_offset: Option<NonMaxU32>,
+}
+
+impl PhaseItem for UiPhaseItem {
+    type SortKey = isize;
+
+    fn sort_key(&self) -> Self::SortKey {
+        self.z_index
+    }
+
+    fn entity(&self) -> Entity {
+        self.entity
+    }
+
+    fn draw_function(&self) -> DrawFunctionId {
+        self.draw_function_id
+    }
+
+    fn batch_range(&self) -> &Range<u32> {
+        &self.batch_range
+    }
+
+    fn batch_range_mut(&mut self) -> &mut Range<u32> {
+        &mut self.batch_range
+    }
+
+    fn dynamic_offset(&self) -> Option<NonMaxU32> {
+        self.dynamic_offset
+    }
+
+    fn dynamic_offset_mut(&mut self) -> &mut Option<NonMaxU32> {
+        &mut self.dynamic_offset
+    }
+}
 
 #[derive(Component, Debug, Copy, Clone, Reflect)]
 pub struct UiNodeSettings {
@@ -166,6 +217,19 @@ pub fn extract_nodes(
     }
 }
 
+pub fn extract_ui_phases(
+    mut commands: Commands,
+    cameras_2d: Extract<Query<(Entity, &Camera), With<Camera2d>>>,
+) {
+    for (entity, camera) in cameras_2d.iter() {
+        if camera.is_active {
+            commands
+                .get_or_spawn(entity)
+                .insert(RenderPhase::<UiPhaseItem>::default());
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct PreparedResources {
     pub vertex_buffer: BufferVec<[[f32; 2]; 3]>,
@@ -173,7 +237,6 @@ pub struct PreparedResources {
     pub uniform_buffer: DynamicUniformBuffer<LayoutUniform>,
     pub bind_group: Option<BindGroup>,
     pub offsets: HashMap<UVec2, u32>,
-    pub queued_nodes: Vec<(isize, u32, u32)>,
 }
 
 impl Default for PreparedResources {
@@ -184,17 +247,41 @@ impl Default for PreparedResources {
             uniform_buffer: DynamicUniformBuffer::default(),
             bind_group: None,
             offsets: HashMap::with_capacity(16),
-            queued_nodes: Vec::with_capacity(128),
         }
     }
 }
 
-pub fn prepare_extracted_nodes(
-    resources: ResMut<PreparedResources>,
-    pipeline: Res<UiNodePipeline>,
+pub fn queue_ui_nodes(
+    draw_functions: Res<DrawFunctions<UiPhaseItem>>,
+    mut ui_phases: Query<&mut RenderPhase<UiPhaseItem>>,
+    nodes: Res<ExtractedNodes>,
+) {
+    let function = draw_functions
+        .read()
+        .get_id::<BasicNodeDrawFunction>()
+        .unwrap();
+    for mut phase in ui_phases.iter_mut() {
+        for (entity, node) in nodes.iter() {
+            phase.items.push(UiPhaseItem {
+                entity: *entity,
+                z_index: node.z_index,
+                draw_function_id: function,
+                // batch_range and dynamic_offset are set in the prepare step
+                batch_range: 0..0,
+                dynamic_offset: None,
+            });
+        }
+    }
+}
+
+pub fn prepare_ui_nodes(
+    mut commands: Commands,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    extracted: Res<ExtractedNodes>,
+    pipeline: Res<UiNodePipeline>,
+    resources: ResMut<PreparedResources>,
+    extracted_nodes: Res<ExtractedNodes>,
+    mut ui_phases: Query<&mut RenderPhase<UiPhaseItem>>,
 ) {
     let resources = resources.into_inner();
     if resources.index_buffer.is_empty() {
@@ -204,69 +291,56 @@ pub fn prepare_extracted_nodes(
             .write_buffer(&render_device, &render_queue);
     }
 
-    if resources.bind_group.is_none() {}
-
     resources.vertex_buffer.clear();
     resources.uniform_buffer.clear();
-    resources.queued_nodes.clear();
     resources.offsets.clear();
 
     {
-        let mut writer = resources
+        let total_length = ui_phases.iter().map(|phase| phase.items.len()).sum();
+        let mut uniform_writer = resources
             .uniform_buffer
-            .get_writer(extracted.len(), &render_device, &render_queue)
+            .get_writer(total_length, &render_device, &render_queue)
             .unwrap();
 
-        for extracted in extracted.values() {
-            resources
-                .vertex_buffer
-                .push(extracted.affine.to_cols_array_2d());
+        for mut phase in ui_phases.iter_mut() {
+            for (idx, item) in phase.items.iter_mut().enumerate() {
+                let node = extracted_nodes.get(&item.entity).unwrap();
+                resources.vertex_buffer.push(node.affine.to_cols_array_2d());
 
-            match resources.offsets.get(&extracted.target_size) {
-                Some(offset) => resources.queued_nodes.push((
-                    extracted.z_index,
-                    resources.vertex_buffer.len() as u32 - 1,
-                    *offset,
-                )),
-                None => {
-                    let matrix = Mat3::from_scale_angle_translation(
-                        Vec2::new(
-                            2.0 / extracted.target_size.x as f32,
-                            -2.0 / extracted.target_size.y as f32,
-                        ),
-                        0.0,
-                        Vec2::new(-1.0, 1.0),
-                    );
+                match resources.offsets.get(&node.target_size) {
+                    Some(offset) => item.dynamic_offset = NonMaxU32::new(*offset),
+                    None => {
+                        let matrix = Mat3::from_scale_angle_translation(
+                            Vec2::new(
+                                2.0 / node.target_size.x as f32,
+                                -2.0 / node.target_size.y as f32,
+                            ),
+                            0.0,
+                            Vec2::new(-1.0, 1.0),
+                        );
 
-                    let cols = matrix.to_cols_array_2d();
-                    let cols = [
-                        Vec4::new(cols[0][0], cols[0][1], cols[0][2], 0.0),
-                        Vec4::new(cols[1][0], cols[1][1], cols[1][2], 0.0),
-                        Vec4::new(cols[2][0], cols[2][1], cols[2][2], 0.0),
-                    ];
+                        let cols = matrix.to_cols_array_2d();
+                        let cols = [
+                            Vec4::new(cols[0][0], cols[0][1], cols[0][2], 0.0),
+                            Vec4::new(cols[1][0], cols[1][1], cols[1][2], 0.0),
+                            Vec4::new(cols[2][0], cols[2][1], cols[2][2], 0.0),
+                        ];
 
-                    let offset = writer.write(&LayoutUniform {
-                        screen_to_ndc: cols,
-                    });
+                        let offset = uniform_writer.write(&LayoutUniform {
+                            screen_to_ndc: cols,
+                        });
 
-                    resources.offsets.insert(extracted.target_size, offset);
-                    resources.queued_nodes.push((
-                        extracted.z_index,
-                        resources.vertex_buffer.len() as u32 - 1,
-                        offset,
-                    ));
+                        resources.offsets.insert(node.target_size, offset);
+                        item.dynamic_offset = NonMaxU32::new(offset);
+                    }
                 }
+
+                item.batch_range = (idx as u32)..(idx as u32 + 1);
+
+                commands.get_or_spawn(item.entity);
             }
         }
-
-        resources
-            .vertex_buffer
-            .write_buffer(&render_device, &render_queue);
     }
-
-    resources
-        .queued_nodes
-        .sort_unstable_by_key(|(index, _, _)| *index);
 
     resources.bind_group = Some(render_device.create_bind_group(
         "view_uniform_bind_group",
@@ -280,26 +354,102 @@ pub fn prepare_extracted_nodes(
             }),
         }],
     ));
+
+    resources
+        .vertex_buffer
+        .write_buffer(&render_device, &render_queue);
+}
+
+pub struct BindLayoutUniform<const I: usize>;
+pub struct BindVertexBuffer<const I: usize>;
+pub struct DrawUiPhaseItem;
+
+pub type BasicNodeDrawFunction = (BindLayoutUniform<0>, BindVertexBuffer<0>, DrawUiPhaseItem);
+
+impl<const I: usize> RenderCommand<UiPhaseItem> for BindLayoutUniform<I> {
+    type Param = SRes<PreparedResources>;
+    type ViewQuery = ();
+    type ItemQuery = ();
+
+    fn render<'w>(
+        item: &UiPhaseItem,
+        _view: ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
+        param: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let param = param.into_inner();
+        pass.set_bind_group(
+            I,
+            param.bind_group.as_ref().unwrap(),
+            &[item.dynamic_offset.unwrap().get()],
+        );
+
+        RenderCommandResult::Success
+    }
+}
+
+impl<const I: usize> RenderCommand<UiPhaseItem> for BindVertexBuffer<I> {
+    type Param = SRes<PreparedResources>;
+    type ItemQuery = ();
+    type ViewQuery = ();
+
+    fn render<'w>(
+        _item: &UiPhaseItem,
+        _view: ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
+        param: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let param = param.into_inner();
+
+        pass.set_vertex_buffer(I, param.vertex_buffer.buffer().unwrap().slice(..));
+        pass.set_index_buffer(
+            param.index_buffer.buffer().unwrap().slice(..),
+            0,
+            IndexFormat::Uint32,
+        );
+
+        RenderCommandResult::Success
+    }
+}
+
+impl RenderCommand<UiPhaseItem> for DrawUiPhaseItem {
+    type Param = ();
+    type ItemQuery = ();
+    type ViewQuery = ();
+
+    fn render<'w>(
+        item: &UiPhaseItem,
+        _view: ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
+        _param: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        pass.draw_indexed(0..6, 0, item.batch_range.clone());
+        RenderCommandResult::Success
+    }
 }
 
 impl ViewNode for UiLayoutNode {
-    type ViewQuery = &'static ViewTarget;
+    type ViewQuery = (&'static ViewTarget, &'static RenderPhase<UiPhaseItem>);
 
     fn run<'w>(
         &self,
         _: &mut bevy::render::render_graph::RenderGraphContext,
         render_context: &mut bevy::render::renderer::RenderContext<'w>,
-        target: bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
+        (target, phase): bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), bevy::render::render_graph::NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
-        let resources = world.resource::<PreparedResources>();
+        let draw_functions = world.resource::<DrawFunctions<UiPhaseItem>>();
         let Some(pipeline) =
             pipeline_cache.get_render_pipeline(world.resource::<UiNodePipeline>().pipeline_id)
         else {
             return Ok(());
         };
 
+        let device = render_context.render_device().clone();
         let encoder = render_context.command_encoder();
         encoder.push_debug_group("UiLayoutNode");
 
@@ -320,14 +470,12 @@ impl ViewNode for UiLayoutNode {
             });
 
             rpass.set_pipeline(pipeline);
-            rpass.set_vertex_buffer(0, *resources.vertex_buffer.buffer().unwrap().slice(..));
-            rpass.set_index_buffer(
-                *resources.index_buffer.buffer().unwrap().slice(..),
-                IndexFormat::Uint32,
-            );
-            for (_, idx, draw) in resources.queued_nodes.iter() {
-                rpass.set_bind_group(0, resources.bind_group.as_ref().unwrap(), &[*draw]);
-                rpass.draw_indexed(0..6, 0, *idx..*idx + 1);
+            let mut pass = TrackedRenderPass::new(&device, rpass);
+
+            let mut draw_functions = draw_functions.write();
+            for item in phase.items.iter() {
+                let draw_function = draw_functions.get_mut(item.draw_function_id).unwrap();
+                draw_function.draw(world, &mut pass, item.entity, item);
             }
         }
 
@@ -366,7 +514,15 @@ impl Plugin for UiRenderPlugin {
             .init_resource::<PreparedResources>()
             .init_resource::<UiNodePipeline>()
             .init_resource::<ExtractedNodes>()
-            .add_systems(ExtractSchedule, extract_nodes)
-            .add_systems(Render, prepare_extracted_nodes.in_set(RenderSet::Prepare));
+            .init_resource::<DrawFunctions<UiPhaseItem>>()
+            .add_render_command::<UiPhaseItem, BasicNodeDrawFunction>()
+            .add_systems(ExtractSchedule, (extract_nodes, extract_ui_phases))
+            .add_systems(
+                Render,
+                (
+                    prepare_ui_nodes.in_set(RenderSet::Prepare),
+                    queue_ui_nodes.in_set(RenderSet::Queue),
+                ),
+            );
     }
 }
