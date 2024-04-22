@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
-    render::UiNodeSettings,
+    render::{UiNodeSettings, VertexColors},
 };
 
 #[derive(Default)]
@@ -95,6 +95,8 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
             NodeSize(layout.resolution.as_vec2()),
             UiNodeSettings {
                 target_resolution: layout.resolution,
+                vertex_colors: VertexColors::default(),
+                opacity: 1.0,
             },
             ZIndex(0),
         ))
@@ -130,6 +132,8 @@ fn spawn_layout_inner(
                 NodeSize(node.size),
                 UiNodeSettings {
                     target_resolution: resolution,
+                    vertex_colors: VertexColors::default(),
+                    opacity: 1.0,
                 },
                 ZIndex(*z_index),
             ))

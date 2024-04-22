@@ -5,7 +5,7 @@ use egui::{
 
 use crate::{
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
-    render::UiNodeSettings,
+    render::{UiNodeSettings, VertexColors},
 };
 
 use self::selectable_label::DraggableLabel;
@@ -222,6 +222,8 @@ fn display_node_tree_impl(
                                     NodeSize(Vec2::splat(50.0)),
                                     UiNodeSettings {
                                         target_resolution: UVec2::new(1920, 1080),
+                                        vertex_colors: VertexColors::default(),
+                                        opacity: 1.0,
                                     },
                                     ZIndex(2),
                                 ))

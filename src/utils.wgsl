@@ -1,7 +1,9 @@
 #define_import_path bevy_layout_ui
 
-struct LayoutUniform {
+struct CommonNodeUniform {
     layout_to_ndc: mat3x3<f32>,
+    vertex_colors: array<vec4<f32>, 4>,
+    opacity: f32
 };
 
 struct NodeVertexInput {
@@ -20,12 +22,12 @@ fn transform_node_layout(model: NodeVertexInput, coordinates: vec2<f32>) -> vec2
     return (matrix * vec3(coordinates, 1.0)).xy;
 }
 
-fn transform_node_to_screen(model: NodeVertexInput, layout_to_ndc: LayoutUniform, coordinates: vec2<f32>) -> vec2<f32> {
+fn transform_node_to_screen(model: NodeVertexInput, layout_to_ndc: mat3x3<f32>, coordinates: vec2<f32>) -> vec2<f32> {
     let matrix = mat3x3<f32>(
         vec3(model.model_col0_, 0.0),
         vec3(model.model_col1_, 0.0),
         vec3(model.model_col2_, 1.0)
     );
 
-    return (layout_to_ndc.layout_to_ndc * matrix * vec3(coordinates, 1.0)).xy;
+    return (layout_to_ndc * matrix * vec3(coordinates, 1.0)).xy;
 }

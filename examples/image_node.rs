@@ -160,9 +160,9 @@ impl RenderCommand<UiNodeItem> for BindImagePipeline {
     type ItemQuery = ();
 
     fn render<'w>(
-        item: &UiNodeItem,
-        view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
-        entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
+        _item: &UiNodeItem,
+        _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
         (pipeline, cache): bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {

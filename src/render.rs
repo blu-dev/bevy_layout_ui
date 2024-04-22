@@ -30,10 +30,17 @@ use bevy::render::view::ViewTarget;
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::sprite::Anchor;
 use bevy::utils::nonmax::NonMaxU32;
-use bevy::utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 
 use crate::math::{GlobalTransform, NodeSize, ZIndex};
+
+#[derive(Debug, Copy, Clone, Reflect, Default)]
+pub struct VertexColors {
+    pub top_left: Color,
+    pub top_right: Color,
+    pub bottom_left: Color,
+    pub bottom_right: Color,
+}
 
 /// Marker component used to skip rendering nodes
 ///
@@ -85,40 +92,88 @@ impl NodeVertexInput {
     }
 }
 
-/// Layout uniform managed by the UI layouting systems
+/// Common node uniform managed by the UI layouting systems
 ///
-/// This uniform contains a transformation matrix that will convert layout-space screen coordinates
-/// to normalized device coordinates (NDC).
+/// This uniform is built off of the [`CommonNodeAttributes`] component and can be used
+/// by any node as built-ins to enhance the functionality of their own node kind.
 ///
-/// This uniform is built off of the layout's target resolution, and does not depend on the camera's
-/// render target size.
-///
-/// This uniformcan be imported from `bevy_layout_ui::LayoutUniform`, and is defined:
-/// ```wgsl
-/// struct LayoutUniform {
-///     layout_to_ndc: mat3x3
-/// };
-/// ```
+/// You can import this uniform from `bevy_layout_ui::CommonNodeUniform`
 #[repr(C)]
 #[derive(Debug, Copy, Clone, ShaderType)]
-pub struct LayoutUniform {
+pub struct CommonNodeUniform {
     layout_to_ndc: [Vec4; 3],
+    vertex_colors: [Vec4; 4],
+    opacity: f32,
 }
 
-impl LayoutUniform {
-    /// Converts this uniform into an affine
-    pub fn into_affine(&self) -> Affine2 {
-        let mat3 = Mat3::from_cols(
-            self.layout_to_ndc[0].xyz(),
-            self.layout_to_ndc[1].xyz(),
-            self.layout_to_ndc[2].xyz(),
-        );
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum VertexPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
 
-        Affine2::from_mat3(mat3)
+impl CommonNodeUniform {
+    pub const fn new() -> Self {
+        Self {
+            layout_to_ndc: [Vec4::ZERO; 3],
+            vertex_colors: [Vec4::ONE; 4],
+            opacity: 1.0,
+        }
     }
 
-    /// Converts an affine into this uniform
-    pub fn from_affine(affine: Affine2) -> Self {
+    pub fn from_opacity(opacity: f32) -> Self {
+        Self::new().with_opacity(opacity)
+    }
+
+    pub fn from_vertex_colors(
+        top_left: Color,
+        top_right: Color,
+        bottom_left: Color,
+        bottom_right: Color,
+    ) -> Self {
+        Self::new().with_vertex_colors(top_left, top_right, bottom_left, bottom_right)
+    }
+
+    pub fn with_vertex_colors(
+        mut self,
+        top_left: Color,
+        top_right: Color,
+        bottom_left: Color,
+        bottom_right: Color,
+    ) -> Self {
+        self.vertex_colors[0] = top_left.as_linear_rgba_f32().into();
+        self.vertex_colors[1] = top_right.as_linear_rgba_f32().into();
+        self.vertex_colors[2] = bottom_left.as_linear_rgba_f32().into();
+        self.vertex_colors[3] = bottom_right.as_linear_rgba_f32().into();
+        self
+    }
+
+    pub fn with_opacity(self, opacity: f32) -> Self {
+        Self {
+            opacity: opacity.clamp(0.0, 1.0),
+            ..self
+        }
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn vertex_color(&self, position: VertexPosition) -> Color {
+        let color = match position {
+            VertexPosition::TopLeft => self.vertex_colors[0],
+            VertexPosition::TopRight => self.vertex_colors[1],
+            VertexPosition::BottomLeft => self.vertex_colors[2],
+            VertexPosition::BottomRight => self.vertex_colors[3],
+        };
+
+        Color::rgba_linear(color.x, color.y, color.z, color.w)
+    }
+
+    /// Sets the affine of this uniform
+    pub fn with_affine(self, affine: Affine2) -> Self {
         let mat3 = Mat3::from_cols(
             affine.matrix2.x_axis.extend(0.0),
             affine.matrix2.y_axis.extend(0.0),
@@ -131,7 +186,13 @@ impl LayoutUniform {
                 mat3.y_axis.extend(0.0),
                 mat3.z_axis.extend(0.0),
             ],
+            ..self
         }
+    }
+
+    /// Converts an affine into this uniform
+    pub fn from_affine(affine: Affine2) -> Self {
+        Self::new().with_affine(affine)
     }
 
     /// Takes a layout size and constructs a layout -> NDC transformation
@@ -142,7 +203,7 @@ impl LayoutUniform {
             0.0,
             Vec2::new(-1.0, 1.0),
         );
-        Self::from_affine(affine)
+        Self::new().with_affine(affine)
     }
 }
 
@@ -272,7 +333,7 @@ impl FromWorld for InvalidNodePipeline {
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: Some(LayoutUniform::min_size()),
+                    min_binding_size: Some(CommonNodeUniform::min_size()),
                 },
                 count: None,
             }],
@@ -292,6 +353,8 @@ impl FromWorld for InvalidNodePipeline {
 #[derive(Component, Debug, Copy, Clone, Reflect)]
 pub struct UiNodeSettings {
     pub target_resolution: UVec2,
+    pub vertex_colors: VertexColors,
+    pub opacity: f32,
 }
 
 pub struct UiRenderPlugin;
@@ -300,9 +363,9 @@ pub struct UiRenderPlugin;
 pub struct UiLayoutNode;
 
 pub struct ExtractedNode {
-    target_size: UVec2,
     affine: Affine2,
     z_index: isize,
+    settings: UiNodeSettings,
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -343,9 +406,9 @@ pub fn extract_nodes(
         extracted_nodes.insert(
             data.entity,
             ExtractedNode {
-                target_size: data.settings.target_resolution,
                 affine,
                 z_index: data.z_index.0,
+                settings: *data.settings,
             },
         );
     }
@@ -368,8 +431,7 @@ pub fn extract_ui_phases(
 pub struct PreparedResources {
     vertex_buffer: BufferVec<[[f32; 2]; 3]>,
     index_buffer: BufferVec<u32>,
-    uniform_buffer: DynamicUniformBuffer<LayoutUniform>,
-    offsets: HashMap<UVec2, u32>,
+    uniform_buffer: DynamicUniformBuffer<CommonNodeUniform>,
     bind_group: Option<BindGroup>,
 }
 
@@ -379,7 +441,6 @@ impl Default for PreparedResources {
             vertex_buffer: BufferVec::new(BufferUsages::VERTEX),
             index_buffer: BufferVec::new(BufferUsages::INDEX),
             uniform_buffer: DynamicUniformBuffer::default(),
-            offsets: HashMap::with_capacity(16),
             bind_group: None,
         }
     }
@@ -419,7 +480,7 @@ pub fn prepare_ui_nodes(
 ) {
     let resources = resources.into_inner();
     if resources.index_buffer.is_empty() {
-        resources.index_buffer.extend([2, 1, 0, 2, 3, 1]);
+        resources.index_buffer.extend([2, 0, 1, 2, 1, 3]);
         resources
             .index_buffer
             .write_buffer(&render_device, &render_queue);
@@ -427,7 +488,6 @@ pub fn prepare_ui_nodes(
 
     resources.vertex_buffer.clear();
     resources.uniform_buffer.clear();
-    resources.offsets.clear();
 
     {
         let total_length = ui_phases.iter().map(|phase| phase.items.len()).sum();
@@ -445,33 +505,17 @@ pub fn prepare_ui_nodes(
                 let node = extracted_nodes.get(&item.entity).unwrap();
                 resources.vertex_buffer.push(node.affine.to_cols_array_2d());
 
-                match resources.offsets.get(&node.target_size) {
-                    Some(offset) => item.dynamic_offset = NonMaxU32::new(*offset),
-                    None => {
-                        let matrix = Mat3::from_scale_angle_translation(
-                            Vec2::new(
-                                2.0 / node.target_size.x as f32,
-                                -2.0 / node.target_size.y as f32,
-                            ),
-                            0.0,
-                            Vec2::new(-1.0, 1.0),
-                        );
-
-                        let cols = matrix.to_cols_array_2d();
-                        let cols = [
-                            Vec4::new(cols[0][0], cols[0][1], cols[0][2], 0.0),
-                            Vec4::new(cols[1][0], cols[1][1], cols[1][2], 0.0),
-                            Vec4::new(cols[2][0], cols[2][1], cols[2][2], 0.0),
-                        ];
-
-                        let offset = uniform_writer.write(&LayoutUniform {
-                            layout_to_ndc: cols,
-                        });
-
-                        resources.offsets.insert(node.target_size, offset);
-                        item.dynamic_offset = NonMaxU32::new(offset);
-                    }
-                }
+                let offset = uniform_writer.write(
+                    &CommonNodeUniform::from_layout_size(node.settings.target_resolution)
+                        .with_vertex_colors(
+                            node.settings.vertex_colors.top_left,
+                            node.settings.vertex_colors.top_right,
+                            node.settings.vertex_colors.bottom_left,
+                            node.settings.vertex_colors.bottom_right,
+                        )
+                        .with_opacity(node.settings.opacity),
+                );
+                item.dynamic_offset = NonMaxU32::new(offset);
 
                 item.batch_range = (idx as u32)..(idx as u32 + 1);
 
@@ -492,7 +536,7 @@ pub fn prepare_ui_nodes(
             resource: BindingResource::Buffer(BufferBinding {
                 buffer: resources.uniform_buffer.buffer().unwrap(),
                 offset: 0,
-                size: Some(LayoutUniform::min_size()),
+                size: Some(CommonNodeUniform::min_size()),
             }),
         }],
     ));

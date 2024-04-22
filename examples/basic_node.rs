@@ -186,7 +186,7 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 struct BasicPlugin;
 
 impl Plugin for BasicPlugin {
-    fn build(&self, app: &mut App) {}
+    fn build(&self, _: &mut App) {}
 
     fn finish(&self, app: &mut App) {
         let render_app = app.sub_app_mut(RenderApp);
