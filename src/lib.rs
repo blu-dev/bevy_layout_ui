@@ -13,9 +13,6 @@ pub mod math;
 pub mod render;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SystemSet)]
-pub struct PrepareUiNodes;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SystemSet)]
 pub enum UiLayoutSystem {
     PropagateTransforms,
     ComputeBoundingBoxes,

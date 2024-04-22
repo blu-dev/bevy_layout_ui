@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::ops::Range;
 
 use bevy::app::Plugin;
@@ -7,7 +6,7 @@ use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::entity::{EntityHash, EntityHashMap};
 use bevy::ecs::query::{QueryData, ROQueryItem};
 use bevy::ecs::system::lifetimeless::SRes;
-use bevy::ecs::system::{ReadOnlySystemParam, SystemParamItem};
+use bevy::ecs::system::SystemParamItem;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
@@ -17,13 +16,13 @@ use bevy::render::render_phase::{
     RenderPhase, TrackedRenderPass,
 };
 use bevy::render::render_resource::{
-    AsBindGroupShaderType, BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry,
-    BindingResource, BindingType, BlendState, BufferBinding, BufferBindingType, BufferUsages,
-    BufferVec, CachedRenderPipelineId, ColorTargetState, ColorWrites, DynamicUniformBuffer,
-    FragmentState, FrontFace, IndexFormat, LoadOp, MultisampleState, Operations, PipelineCache,
-    PolygonMode, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipelineDescriptor, ShaderStages, ShaderType, StoreOp, TextureFormat, VertexAttribute,
-    VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+    BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
+    BlendState, BufferBinding, BufferBindingType, BufferUsages, BufferVec, CachedRenderPipelineId,
+    ColorTargetState, ColorWrites, DynamicUniformBuffer, FragmentState, FrontFace, IndexFormat,
+    LoadOp, MultisampleState, Operations, PipelineCache, PolygonMode, PrimitiveState,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
+    ShaderType, StoreOp, TextureFormat, VertexBufferLayout, VertexFormat, VertexState,
+    VertexStepMode,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::BevyDefault;
@@ -35,7 +34,6 @@ use bevy::utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 
 use crate::math::{GlobalTransform, NodeSize, ZIndex};
-use crate::PrepareUiNodes;
 
 /// Marker component used to skip rendering nodes
 ///
@@ -433,10 +431,14 @@ pub fn prepare_ui_nodes(
 
     {
         let total_length = ui_phases.iter().map(|phase| phase.items.len()).sum();
-        let mut uniform_writer = resources
-            .uniform_buffer
-            .get_writer(total_length, &render_device, &render_queue)
-            .unwrap();
+
+        let Some(mut uniform_writer) =
+            resources
+                .uniform_buffer
+                .get_writer(total_length, &render_device, &render_queue)
+        else {
+            return;
+        };
 
         for mut phase in ui_phases.iter_mut() {
             for (idx, item) in phase.items.iter_mut().enumerate() {
@@ -648,32 +650,12 @@ impl ViewNode for UiLayoutNode {
     }
 }
 
-// impl<T: SpecializedUiNode> Plugin for SpecializedNodePlugin<T>
-// where
-//     <T::DrawFunction as RenderCommand<UiNodeItem>>::Param: ReadOnlySystemParam,
-// {
-//     fn build(&self, _: &mut App) {}
-
-//     fn finish(&self, app: &mut App) {
-//         let render_app = app.sub_app_mut(RenderApp);
-
-//         render_app
-//             .init_resource::<UiNodePipeline<T>>()
-//             .init_resource::<ExtractedNodes<T>>()
-//             .add_render_command::<UiNodeItem, T::DrawFunction>()
-//             .add_systems(ExtractSchedule, extract_nodes::<T>)
-//             .add_systems(
-//                 Render,
-//                 (
-//                     queue_ui_nodes::<T>.in_set(RenderSet::Queue),
-//                     prepare_ui_nodes::<T>.in_set(RenderSet::Prepare),
-//                 ),
-//             );
-//     }
-// }
+pub const UTILS_SHADER: Handle<Shader> = Handle::weak_from_u128(0x551B640BDBE84944AC5D0A5081E7C956);
 
 impl Plugin for UiRenderPlugin {
     fn build(&self, app: &mut App) {
+        load_internal_asset!(app, UTILS_SHADER, "utils.wgsl", Shader::from_wgsl);
+
         load_internal_asset!(
             app,
             InvalidNodePipeline::SHADER,
@@ -705,12 +687,11 @@ impl Plugin for UiRenderPlugin {
             .add_render_command::<UiNodeItem, InvalidNodeDrawFunction>()
             .add_systems(ExtractSchedule, extract_ui_phases)
             .add_systems(ExtractSchedule, extract_nodes)
-            .configure_sets(Render, PrepareUiNodes.in_set(RenderSet::Prepare))
             .add_systems(
                 Render,
                 (
                     queue_ui_nodes.in_set(RenderSet::Queue),
-                    prepare_ui_nodes.in_set(PrepareUiNodes),
+                    prepare_ui_nodes.in_set(RenderSet::Prepare),
                 ),
             );
     }

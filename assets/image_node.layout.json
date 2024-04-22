@@ -1,0 +1,33 @@
+{
+  "resolution": [1920, 1080],
+  "nodes": [
+    {
+      "position": [380.0, 406.0],
+      "position_anchor": "TopLeft",
+      "parent_anchor": "TopLeft",
+      "size": [520.0, 50.0],
+      "scale": [1.0, 1.0],
+      "rotation": 0.0,
+      "children": []
+    },
+    {
+      "position": [375.0, 233.0],
+      "position_anchor": "TopLeft",
+      "parent_anchor": "TopLeft",
+      "size": [50.0, 50.0],
+      "scale": [1.0, 1.0],
+      "rotation": 291.0,
+      "children": [
+        {
+          "position": [180.0, 50.0],
+          "position_anchor": "TopLeft",
+          "parent_anchor": "TopLeft",
+          "size": [50.0, 50.0],
+          "scale": [1.0, 1.0],
+          "rotation": 63.0,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

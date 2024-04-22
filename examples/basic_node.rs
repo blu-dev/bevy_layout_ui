@@ -20,7 +20,7 @@ use bevy_layout_ui::{
         BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
         NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
     },
-    PrepareUiNodes, UiLayoutPlugin,
+    UiLayoutPlugin,
 };
 
 #[derive(Component)]
@@ -195,12 +195,7 @@ impl Plugin for BasicPlugin {
             .init_resource::<BasicPipeline>()
             .add_render_command::<UiNodeItem, BasicDrawFunction>()
             .add_systems(ExtractSchedule, extract_basic_nodes)
-            .add_systems(
-                Render,
-                prepare_basic_nodes
-                    .in_set(RenderSet::Prepare)
-                    .before(PrepareUiNodes),
-            );
+            .add_systems(Render, prepare_basic_nodes.in_set(RenderSet::Prepare));
     }
 }
 
@@ -214,11 +209,6 @@ pub fn main() {
         BasicPipeline::SHADER,
         "shaders/basic.wgsl",
         Shader::from_wgsl
-    );
-
-    println!(
-        "{}",
-        std::any::type_name::<<BasicDrawFunction as RenderCommand<UiNodeItem>>::ViewQuery>()
     );
 
     app.add_plugins(UiLayoutPlugin)
