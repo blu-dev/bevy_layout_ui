@@ -1,6 +1,13 @@
+use std::{
+    any::TypeId,
+    hash::{Hash, Hasher},
+    path::PathBuf,
+};
+
 use bevy::{
+    app::DynEq,
     asset::{load_internal_asset, LoadState},
-    ecs::{entity::EntityHashMap, system::lifetimeless::SRes},
+    ecs::{entity::EntityHashMap, schedule::ScheduleLabel, system::lifetimeless::SRes},
     prelude::*,
     render::{
         render_asset::RenderAssets,
@@ -13,7 +20,7 @@ use bevy::{
         renderer::RenderDevice,
         Extract, Render, RenderApp, RenderSet,
     },
-    utils::HashMap,
+    utils::{intern::Interned, HashMap},
 };
 use bevy_layout_ui::{
     loader::Layout,
@@ -22,11 +29,76 @@ use bevy_layout_ui::{
         BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
         NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
     },
-    UiLayoutPlugin,
+    NodeLabel, UiLayoutPlugin, UiNodeApp, UserUiNode,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Component)]
+#[derive(Serialize, Deserialize)]
+pub struct ImageNodeData {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct ImageNodeLabel;
+
+impl NodeLabel for ImageNodeLabel {
+    fn dyn_clone(&self) -> Box<dyn NodeLabel> {
+        Box::new(self.clone())
+    }
+
+    fn as_dyn_eq(&self) -> &dyn DynEq {
+        self
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        let ty_id = TypeId::of::<Self>();
+        Hash::hash(&ty_id, &mut state);
+        Hash::hash(self, &mut state);
+    }
+}
+
+#[derive(Component, Clone)]
 struct ImageNode(Handle<Image>);
+
+impl UserUiNode for ImageNode {
+    const NAME: &'static str = "Image";
+    type Serde = ImageNodeData;
+
+    fn label() -> Interned<dyn NodeLabel> {
+        ImageNodeLabel.intern()
+    }
+
+    fn deserialize<E: serde::de::Error>(
+        serde: Self::Serde,
+        load_context: &mut bevy::asset::LoadContext,
+    ) -> Result<Self, E> {
+        let handle = load_context.load(serde.path);
+        Ok(Self(handle))
+    }
+
+    fn serialize<E: serde::ser::Error>(&self, world: &World) -> Result<Self::Serde, E> {
+        let server = world.resource::<AssetServer>();
+        let path = server.get_path(self.0.id()).ok_or_else(|| {
+            E::custom("Failed to get the asset path of image, it should have been loaded from the filesystem")
+        })?;
+
+        Ok(Self::Serde {
+            path: path.path().to_path_buf(),
+        })
+    }
+
+    fn visit_asset_dependencies(&self, visit_fn: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {
+        visit_fn(self.0.id().untyped())
+    }
+
+    fn spawn(&self, entity: &mut EntityWorldMut) {
+        entity.insert(self.clone());
+    }
+
+    fn reconstruct(entity: EntityRef) -> Self {
+        entity.get::<Self>().unwrap().clone()
+    }
+}
 
 #[derive(Resource, Deref, DerefMut, Default)]
 struct ExtractedImageNodes(EntityHashMap<AssetId<Image>>);
@@ -277,7 +349,8 @@ pub fn main() {
             Update,
             wait_spawn_layout.run_if(resource_exists::<WaitingLayout>),
         )
-        .init_resource::<WaitingLayout>();
+        .init_resource::<WaitingLayout>()
+        .register_user_ui_node::<ImageNode>();
 
     app.world.spawn(Camera2dBundle::default());
 

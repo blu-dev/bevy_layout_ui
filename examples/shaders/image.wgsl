@@ -1,6 +1,6 @@
-#import bevy_layout_ui::{NodeVertexInput, LayoutUniform, transform_node_to_screen}
+#import bevy_layout_ui::{NodeVertexInput, CommonNodeUniform, transform_node_to_screen}
 
-@group(0) @binding(0) var<uniform> view: LayoutUniform;
+@group(0) @binding(0) var<uniform> view: CommonNodeUniform;
 
 @group(1) @binding(0) var color_texture: texture_2d<f32>;
 @group(1) @binding(1) var color_sampler: sampler;
@@ -21,7 +21,7 @@ fn vertex(
     );
 
     var output: VertexOutput;
-    let pos = transform_node_to_screen(in, view, vertex);
+    let pos = transform_node_to_screen(in, view.layout_to_ndc, vertex);
     output.position = vec4<f32>(pos, 0.0, 1.0);
     output.uv = vertex;
 

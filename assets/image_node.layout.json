@@ -8,6 +8,10 @@
       "size": [520.0, 50.0],
       "scale": [1.0, 1.0],
       "rotation": 0.0,
+      "node_kind": "Image",
+      "node_data": {
+        "path": "images/sarina.png"
+      },
       "children": []
     },
     {
@@ -17,6 +21,10 @@
       "size": [50.0, 50.0],
       "scale": [1.0, 1.0],
       "rotation": 291.0,
+      "node_kind": "Image",
+      "node_data": {
+        "path": "images/sarina.png"
+      },
       "children": [
         {
           "position": [180.0, 50.0],
@@ -25,6 +33,10 @@
           "size": [50.0, 50.0],
           "scale": [1.0, 1.0],
           "rotation": 63.0,
+          "node_kind": "Image",
+          "node_data": {
+            "path": "images/sarina.png"
+          },
           "children": []
         }
       ]

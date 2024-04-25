@@ -11,6 +11,7 @@ bytemuck = { version = "1.15.0", features = ["derive"] }
 serde = { version = "1.0.198", features = ["derive"] }
 thiserror = "1.0.59"
 serde_json = "1.0.116"
+serde-value = "0.7.0"
 
 [features]
 editor-ui = ["egui", "bevy-inspector-egui"]
