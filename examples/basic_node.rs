@@ -1,4 +1,10 @@
+use std::{
+    any::TypeId,
+    hash::{Hash, Hasher},
+};
+
 use bevy::{
+    app::DynEq,
     asset::{load_internal_asset, LoadState},
     ecs::{query::ROQueryItem, system::lifetimeless::SRes},
     prelude::*,
@@ -7,6 +13,7 @@ use bevy::{
         render_resource::{CachedRenderPipelineId, PipelineCache},
         Extract, Render, RenderApp, RenderSet,
     },
+    utils::intern::Interned,
     window::PrimaryWindow,
 };
 use bevy_inspector_egui::{
@@ -20,11 +27,60 @@ use bevy_layout_ui::{
         BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
         NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
     },
-    UiLayoutPlugin,
+    NodeLabel, UiLayoutPlugin, UiNodeApp, UserUiNode,
 };
 
-#[derive(Component)]
+#[derive(Component, Copy, Clone, Debug)]
 struct BasicNode;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct BasicNodeLabel;
+
+impl NodeLabel for BasicNodeLabel {
+    fn dyn_clone(&self) -> Box<dyn NodeLabel> {
+        Box::new(self.clone())
+    }
+
+    fn as_dyn_eq(&self) -> &dyn DynEq {
+        self
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        let ty_id = TypeId::of::<Self>();
+        Hash::hash(&ty_id, &mut state);
+        Hash::hash(self, &mut state);
+    }
+}
+
+impl UserUiNode for BasicNode {
+    const NAME: &'static str = "Basic";
+    type Serde = ();
+
+    fn label() -> Interned<dyn bevy_layout_ui::NodeLabel> {
+        BasicNodeLabel.intern()
+    }
+
+    fn deserialize<E: serde::de::Error>(
+        _: Self::Serde,
+        _: &mut bevy::asset::LoadContext,
+    ) -> Result<Self, E> {
+        Ok(Self)
+    }
+
+    fn serialize<E: serde::ser::Error>(&self, _: &World) -> Result<Self::Serde, E> {
+        Ok(())
+    }
+
+    fn reconstruct(entity: EntityRef) -> Self {
+        *entity.get_ref::<BasicNode>().unwrap()
+    }
+
+    fn spawn(&self, entity: &mut EntityWorldMut) {
+        entity.insert(*self);
+    }
+
+    fn visit_asset_dependencies(&self, _: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {}
+}
 
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct ExtractedBasicNodes(Vec<Entity>);
@@ -161,10 +217,13 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
         egui::Window::new(format!("{root:?}")).show(context.get_mut(), |ui| {
             if ui.button("Marshall").clicked() {
                 let tree = bevy_layout_ui::loader::marshall_node_tree(world, root);
-                println!("{tree:?}",);
 
-                let json = serde_json::to_string_pretty(&tree).unwrap();
-                std::fs::write("assets/basic_node.layout.json", &json).unwrap();
+                let json = bevy_layout_ui::loader::serialize_layout_as_json(&tree, world).unwrap();
+                std::fs::write(
+                    "assets/basic_node.layout.json",
+                    serde_json::to_string_pretty(&json).unwrap(),
+                )
+                .unwrap();
             }
             let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) else {
                 return;
@@ -186,7 +245,9 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 struct BasicPlugin;
 
 impl Plugin for BasicPlugin {
-    fn build(&self, _: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.register_user_ui_node::<BasicNode>();
+    }
 
     fn finish(&self, app: &mut App) {
         let render_app = app.sub_app_mut(RenderApp);

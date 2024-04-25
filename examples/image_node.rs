@@ -7,7 +7,7 @@ use std::{
 use bevy::{
     app::DynEq,
     asset::{load_internal_asset, LoadState},
-    ecs::{entity::EntityHashMap, schedule::ScheduleLabel, system::lifetimeless::SRes},
+    ecs::{entity::EntityHashMap, system::lifetimeless::SRes},
     prelude::*,
     render::{
         render_asset::RenderAssets,
@@ -24,7 +24,6 @@ use bevy::{
 };
 use bevy_layout_ui::{
     loader::Layout,
-    math::NodeSize,
     render::{
         BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
         NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
@@ -294,21 +293,12 @@ impl FromWorld for WaitingLayout {
 
 fn wait_spawn_layout(layout: Res<WaitingLayout>, server: Res<AssetServer>, mut commands: Commands) {
     if server.load_state(layout.0.id()) == LoadState::Loaded {
-        let image_handle = server.load::<Image>("images/sarina.png");
         commands.add(move |world: &mut World| {
             let handle = world.remove_resource::<WaitingLayout>().unwrap().0;
             world.resource_scope::<Assets<Layout>, _>(|world, assets| {
                 let layout = assets.get(&handle).unwrap();
                 bevy_layout_ui::loader::spawn_layout(world, layout);
             });
-
-            let entities =
-                Vec::from_iter(world.query_filtered::<Entity, With<NodeSize>>().iter(world));
-            for entity in entities {
-                world
-                    .entity_mut(entity)
-                    .insert(ImageNode(image_handle.clone()));
-            }
         });
     }
 }

@@ -11,7 +11,10 @@ use bevy::{
     utils::{intern::Interned, HashMap},
 };
 use loader::{Layout, LayoutAssetLoader};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{
+    de::{DeserializeOwned, Error},
+    Deserialize, Serialize,
+};
 use serde_value::ValueDeserializer;
 
 #[cfg(feature = "editor-ui")]
@@ -76,13 +79,11 @@ pub trait UserUiNode: Send + Sized + Sync + 'static {
 #[derive(Copy, Clone)]
 pub struct RegisteredUiNode {
     name: &'static str,
-    label: Interned<dyn NodeLabel>,
     deserialize: fn(
         serde_value::Value,
         &mut LoadContext,
     ) -> Result<Box<dyn Any + Send + Sync + 'static>, serde_json::Error>,
-    serialize:
-        fn(&dyn Any, &World) -> Result<Box<dyn Any + Send + Sync + 'static>, serde_json::Error>,
+    serialize: fn(&dyn Any, &World) -> Result<serde_value::Value, serde_json::Error>,
     reconstruct: fn(EntityRef) -> Box<dyn Any + Send + Sync + 'static>,
     spawn: fn(&dyn Any, &mut EntityWorldMut),
     visit_asset_dependencies: fn(&dyn Any, &mut dyn FnMut(UntypedAssetId)),
@@ -102,10 +103,9 @@ impl RegisteredUserUiNodes {
         let label = T::label();
         self.by_name.insert(T::NAME, label.clone());
         self.by_label.insert(
-            label.clone(),
+            label,
             RegisteredUiNode {
                 name: T::NAME,
-                label: label.clone(),
                 deserialize: |value, context| {
                     let value = <T::Serde as Deserialize>::deserialize(ValueDeserializer::<
                         serde_json::Error,
@@ -115,11 +115,9 @@ impl RegisteredUserUiNodes {
                     T::deserialize(value, context).map(|value| Box::new(value) as _)
                 },
                 serialize: |value, world| {
-                    value
-                        .downcast_ref::<T>()
-                        .unwrap()
-                        .serialize(world)
-                        .map(|value| Box::new(value) as _)
+                    let repr = value.downcast_ref::<T>().unwrap().serialize(world)?;
+
+                    serde_value::to_value(repr).map_err(|e| serde_json::Error::custom(e))
                 },
                 reconstruct: |entity| Box::new(T::reconstruct(entity)),
                 spawn: |value, world| value.downcast_ref::<T>().unwrap().spawn(world),

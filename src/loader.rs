@@ -5,7 +5,7 @@ use std::{
 
 use bevy::{
     asset::{Asset, AssetLoader, AsyncReadExt, LoadContext, VisitAssetDependencies},
-    ecs::{entity::Entity, world::World},
+    ecs::{component::Component, entity::Entity, world::World},
     hierarchy::{BuildWorldChildren, Children, Parent},
     math::{UVec2, Vec2},
     reflect::{Reflect, TypePath},
@@ -17,8 +17,8 @@ use thiserror::Error;
 
 use crate::{
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
-    render::{UiNodeSettings, VertexColors},
-    NodeLabel, RegisteredUiNode, RegisteredUserUiNodes,
+    render::{SkipNodeRender, UiNodeSettings, VertexColors},
+    NodeLabel, RegisteredUiNode, RegisteredUserUiNodes, UiNodeRegistry,
 };
 
 #[derive(Default)]
@@ -169,6 +169,9 @@ impl VisitAssetDependencies for Layout {
     }
 }
 
+#[derive(Component, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicNodeLabel(Interned<dyn NodeLabel>);
+
 pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
     let root_node = world
         .spawn((
@@ -185,6 +188,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                 opacity: 1.0,
             },
             ZIndex(0),
+            SkipNodeRender,
         ))
         .id();
 
@@ -207,23 +211,25 @@ fn spawn_layout_inner(
     z_index: &mut isize,
 ) {
     for node in nodes.iter() {
-        let node_id = world
-            .spawn((
-                Transform::from_position(node.attributes.position)
-                    .with_scale(node.attributes.scale)
-                    .with_rotation(node.attributes.rotation)
-                    .with_parent_anchor(node.attributes.parent_anchor),
-                GlobalTransform::default(),
-                node.attributes.position_anchor,
-                NodeSize(node.attributes.size),
-                UiNodeSettings {
-                    target_resolution: resolution,
-                    vertex_colors: VertexColors::default(),
-                    opacity: 1.0,
-                },
-                ZIndex(*z_index),
-            ))
-            .id();
+        let mut entity = world.spawn((
+            Transform::from_position(node.attributes.position)
+                .with_scale(node.attributes.scale)
+                .with_rotation(node.attributes.rotation)
+                .with_parent_anchor(node.attributes.parent_anchor),
+            GlobalTransform::default(),
+            node.attributes.position_anchor,
+            NodeSize(node.attributes.size),
+            UiNodeSettings {
+                target_resolution: resolution,
+                vertex_colors: VertexColors::default(),
+                opacity: 1.0,
+            },
+            ZIndex(*z_index),
+        ));
+
+        (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);
+
+        let node_id = entity.id();
 
         *z_index += 1;
         spawn_layout_inner(world, node_id, resolution, &node.children, z_index);
@@ -231,44 +237,90 @@ fn spawn_layout_inner(
     }
 }
 
-fn marshall_ui_node(world: &World, entity: Entity) -> UiNodeAttributes {
-    todo!()
-    // let node = world.entity(entity);
+fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Entity) -> UiNode {
+    let node = world.entity(entity);
 
-    // let transform = node.get::<Transform>().unwrap();
-    // let anchor = node.get::<Anchor>().unwrap();
-    // let size = node.get::<NodeSize>().unwrap();
-    // let mut ui_node = UiNodeAttributes {
-    //     position: transform.position,
-    //     scale: transform.scale,
-    //     rotation: transform.rotation,
-    //     parent_anchor: transform.parent_anchor,
-    //     position_anchor: *anchor,
-    //     size: size.0,
-    //     children: vec![],
-    // };
+    let transform = node.get::<Transform>().unwrap();
+    let anchor = node.get::<Anchor>().unwrap();
+    let size = node.get::<NodeSize>().unwrap();
+    let label = node.get::<DynamicNodeLabel>().unwrap();
 
-    // if let Some(children) = node.get::<Children>() {
-    //     ui_node
-    //         .children
-    //         .extend(children.iter().map(|child| marshall_ui_node(world, *child)));
-    // }
+    let registered_node = registry.by_label.get(&label.0).unwrap();
 
-    // ui_node
+    let reconstructed = (registered_node.reconstruct)(node);
+
+    let mut ui_node = UiNode {
+        attributes: UiNodeAttributes {
+            position: transform.position,
+            scale: transform.scale,
+            rotation: transform.rotation,
+            parent_anchor: transform.parent_anchor,
+            position_anchor: *anchor,
+            size: size.0,
+        },
+        label: label.0,
+        data: reconstructed,
+        registered_ui_node: *registered_node,
+        children: vec![],
+    };
+
+    if let Some(children) = node.get::<Children>() {
+        ui_node.children.extend(
+            children
+                .iter()
+                .map(|child| marshall_ui_node(world, registry, *child)),
+        );
+    }
+
+    ui_node
 }
 
 pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
-    todo!()
-    // let root = world.entity(root_entity);
-    // if root.contains::<Parent>() {
-    //     panic!("Cannot serialize node tree because the root entity has a parent");
-    // }
+    let registry = world.resource::<UiNodeRegistry>();
+    let registry = registry.read().unwrap();
+    let root = world.entity(root_entity);
+    if root.contains::<Parent>() {
+        panic!("Cannot serialize node tree because the root entity has a parent");
+    }
 
-    // let resolution = root.get::<UiNodeSettings>().unwrap().target_resolution;
-    // let mut nodes = vec![];
-    // if let Some(children) = root.get::<Children>() {
-    //     nodes.extend(children.iter().map(|child| marshall_ui_node(world, *child)));
-    // }
+    let resolution = root.get::<UiNodeSettings>().unwrap().target_resolution;
+    let mut nodes = vec![];
+    if let Some(children) = root.get::<Children>() {
+        nodes.extend(
+            children
+                .iter()
+                .map(|child| marshall_ui_node(world, &registry, *child)),
+        );
+    }
 
-    // Layout { resolution, nodes }
+    Layout { resolution, nodes }
+}
+
+fn get_nodes_as_nodes_repr(
+    nodes: &[UiNode],
+    world: &World,
+) -> Result<Vec<UiNodeRepr>, serde_json::Error> {
+    let mut repr_nodes = Vec::with_capacity(nodes.len());
+    for node in nodes.iter() {
+        repr_nodes.push(UiNodeRepr {
+            attributes: node.attributes.clone(),
+            node_kind: node.registered_ui_node.name.to_string(),
+            node_data: (node.registered_ui_node.serialize)(node.data.as_ref(), world)?,
+            children: get_nodes_as_nodes_repr(&node.children, world)?,
+        });
+    }
+
+    Ok(repr_nodes)
+}
+
+pub fn serialize_layout_as_json(
+    layout: &Layout,
+    world: &World,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let nodes = get_nodes_as_nodes_repr(&layout.nodes, world)?;
+
+    serde_json::to_value(LayoutRepr {
+        resolution: layout.resolution,
+        nodes,
+    })
 }
