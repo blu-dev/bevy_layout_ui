@@ -1,63 +1,47 @@
-use std::{
-    any::TypeId,
-    hash::{Hash, Hasher},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
+use bevy::asset::load_internal_asset;
+use bevy::prelude::*;
+use bevy::render::render_phase::AddRenderCommand;
+use bevy::render::{Render, RenderApp, RenderSet};
 use bevy::{
-    app::DynEq,
-    asset::{load_internal_asset, LoadState},
     ecs::{entity::EntityHashMap, system::lifetimeless::SRes},
-    prelude::*,
     render::{
         render_asset::RenderAssets,
-        render_phase::{AddRenderCommand, DrawFunctions, RenderCommand, RenderCommandResult},
+        render_phase::{DrawFunctions, RenderCommand, RenderCommandResult},
         render_resource::{
             BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingType,
             CachedRenderPipelineId, IntoBinding, PipelineCache, SamplerBindingType, ShaderStages,
             TextureSampleType, TextureViewDimension,
         },
         renderer::RenderDevice,
-        Extract, Render, RenderApp, RenderSet,
+        Extract,
     },
     utils::{intern::Interned, HashMap},
 };
-use bevy_layout_ui::{
-    loader::Layout,
-    render::{
-        BindLayoutUniform, BindVertexBuffer, DrawUiPhaseItem, InvalidNodePipeline,
-        NodeDrawFunction, SkipNodeRender, UiNodeItem, UiRenderPlugin,
-    },
-    NodeLabel, UiLayoutPlugin, UiNodeApp, UserUiNode,
-};
+use egui::Id;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub struct ImageNodeData {
-    pub path: PathBuf,
-}
+use crate::render::{
+    BindLayoutUniform, BindVertexBuffer, DefaultNodePipeline, DrawUiPhaseItem, NodeDrawFunction,
+    SkipNodeRender, UiNodeItem,
+};
+use crate::{EditorUiNode, NodeLabel, UiNodeApp, UserUiNode};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ImageNodeLabel;
 
-impl NodeLabel for ImageNodeLabel {
-    fn dyn_clone(&self) -> Box<dyn NodeLabel> {
-        Box::new(self.clone())
-    }
+decl_node_label!(ImageNodeLabel);
 
-    fn as_dyn_eq(&self) -> &dyn DynEq {
-        self
-    }
-
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        let ty_id = TypeId::of::<Self>();
-        Hash::hash(&ty_id, &mut state);
-        Hash::hash(self, &mut state);
-    }
+#[derive(Deserialize, Serialize)]
+pub struct ImageNodeData {
+    path: PathBuf,
 }
 
-#[derive(Component, Clone)]
-struct ImageNode(Handle<Image>);
+#[derive(Debug, Clone, Component, Default)]
+pub struct ImageNode {
+    image: Handle<Image>,
+}
 
 impl UserUiNode for ImageNode {
     const NAME: &'static str = "Image";
@@ -71,31 +55,73 @@ impl UserUiNode for ImageNode {
         serde: Self::Serde,
         load_context: &mut bevy::asset::LoadContext,
     ) -> Result<Self, E> {
-        let handle = load_context.load(serde.path);
-        Ok(Self(handle))
+        Ok(Self {
+            image: load_context.load(serde.path.clone()),
+        })
     }
 
-    fn serialize<E: serde::ser::Error>(&self, world: &World) -> Result<Self::Serde, E> {
-        let server = world.resource::<AssetServer>();
-        let path = server.get_path(self.0.id()).ok_or_else(|| {
-            E::custom("Failed to get the asset path of image, it should have been loaded from the filesystem")
-        })?;
+    fn serialize<E: serde::ser::Error>(
+        &self,
+        world: &bevy::prelude::World,
+    ) -> Result<Self::Serde, E> {
+        let path = world
+            .resource::<AssetServer>()
+            .get_path(self.image.id())
+            .ok_or_else(|| E::custom("Image handle is not represented by the filesystem"))?;
 
-        Ok(Self::Serde {
+        Ok(ImageNodeData {
             path: path.path().to_path_buf(),
         })
     }
 
-    fn visit_asset_dependencies(&self, visit_fn: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {
-        visit_fn(self.0.id().untyped())
+    fn reconstruct(entity: bevy::prelude::EntityRef) -> Self {
+        entity
+            .get::<ImageNode>()
+            .cloned()
+            .expect("ImageNode::reconstruct expected the entity to contain ImageNode")
     }
 
-    fn spawn(&self, entity: &mut EntityWorldMut) {
+    fn spawn(&self, entity: &mut bevy::prelude::EntityWorldMut) {
         entity.insert(self.clone());
     }
 
-    fn reconstruct(entity: EntityRef) -> Self {
-        entity.get::<Self>().unwrap().clone()
+    fn visit_asset_dependencies(&self, visit_fn: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {
+        visit_fn(self.image.id().untyped());
+    }
+}
+
+#[cfg(feature = "editor-ui")]
+impl EditorUiNode for ImageNode {
+    fn edit(entity: &mut EntityWorldMut, ui: &mut egui::Ui) {
+        let id = Id::new("image-node-editor").with(entity.id());
+        let mut current_path = ui.data_mut(|data| {
+            data.get_temp_mut_or_insert_with(id, || {
+                let handle = entity.get::<ImageNode>().unwrap().image.id();
+                entity
+                    .world()
+                    .resource::<AssetServer>()
+                    .get_path(handle)
+                    .map(|path| path.path().display().to_string())
+                    .unwrap_or_default()
+            })
+            .clone()
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Image Path");
+            ui.text_edit_singleline(&mut current_path);
+        });
+
+        let handle = entity.world().resource::<AssetServer>().load(&current_path);
+        ui.data_mut(|data| {
+            data.insert_temp(id, current_path);
+        });
+
+        entity.get_mut::<ImageNode>().unwrap().image = handle;
+    }
+
+    fn cleanup(entity: &mut EntityWorldMut) {
+        entity.remove::<Self>();
     }
 }
 
@@ -114,7 +140,7 @@ impl ImageNodePipeline {
 
 impl FromWorld for ImageNodePipeline {
     fn from_world(world: &mut World) -> Self {
-        let default_pipeline = world.resource::<InvalidNodePipeline>();
+        let default_pipeline = world.resource::<DefaultNodePipeline>();
         let device = world.resource::<RenderDevice>();
         let pipeline_cache = world.resource::<PipelineCache>();
         let mut desc = default_pipeline.render_pipeline_descriptor();
@@ -158,7 +184,7 @@ fn extract_image_nodes(
 ) {
     extracted.clear();
     for (entity, node) in nodes.iter() {
-        extracted.insert(entity, node.0.id());
+        extracted.insert(entity, node.image.id());
     }
 }
 
@@ -278,39 +304,20 @@ impl<const I: usize> RenderCommand<UiNodeItem> for BindImageGroup<I> {
     }
 }
 
-#[derive(Resource)]
-struct WaitingLayout(Handle<Layout>);
-
-impl FromWorld for WaitingLayout {
-    fn from_world(world: &mut World) -> Self {
-        Self(
-            world
-                .resource::<AssetServer>()
-                .load("image_node.layout.json"),
-        )
-    }
-}
-
-fn wait_spawn_layout(layout: Res<WaitingLayout>, server: Res<AssetServer>, mut commands: Commands) {
-    if server.load_state(layout.0.id()) == LoadState::Loaded {
-        commands.add(move |world: &mut World| {
-            let handle = world.remove_resource::<WaitingLayout>().unwrap().0;
-            world.resource_scope::<Assets<Layout>, _>(|world, assets| {
-                let layout = assets.get(&handle).unwrap();
-                bevy_layout_ui::loader::spawn_layout(world, layout);
-            });
-        });
-    }
-}
-
-struct ImageNodePlugin;
+pub struct ImageNodePlugin;
 
 impl Plugin for ImageNodePlugin {
     fn build(&self, app: &mut App) {
+        app.register_user_ui_node::<ImageNode>();
+        #[cfg(feature = "editor-ui")]
+        {
+            app.register_editor_ui_node::<ImageNode>();
+        }
+
         load_internal_asset!(
             app,
             ImageNodePipeline::SHADER,
-            "shaders/image.wgsl",
+            "shaders/image_node.wgsl",
             Shader::from_wgsl
         );
     }
@@ -325,24 +332,4 @@ impl Plugin for ImageNodePlugin {
             .add_systems(ExtractSchedule, extract_image_nodes)
             .add_systems(Render, prepare_image_nodes.in_set(RenderSet::Prepare));
     }
-}
-
-pub fn main() {
-    let mut app = App::new();
-
-    app.add_plugins(DefaultPlugins)
-        .add_plugins(UiLayoutPlugin)
-        .add_plugins(UiRenderPlugin)
-        .add_plugins(ImageNodePlugin)
-        .add_systems(Update, bevy::window::close_on_esc)
-        .add_systems(
-            Update,
-            wait_spawn_layout.run_if(resource_exists::<WaitingLayout>),
-        )
-        .init_resource::<WaitingLayout>()
-        .register_user_ui_node::<ImageNode>();
-
-    app.world.spawn(Camera2dBundle::default());
-
-    app.run();
 }

@@ -276,12 +276,12 @@ pub type InvalidNodeDrawFunction = (
 /// field of the `UiNodeItem` for the node or by inserting a [`NodeDrawFunction`] component on
 /// the entity in the render world.
 #[derive(Resource, Debug)]
-pub struct InvalidNodePipeline {
+pub struct DefaultNodePipeline {
     cached_pipeline_id: CachedRenderPipelineId,
     bind_group_layout: BindGroupLayout,
 }
 
-impl InvalidNodePipeline {
+impl DefaultNodePipeline {
     pub const SHADER: Handle<Shader> = Handle::weak_from_u128(0x4A737C1653534235A71B38F556B37B1C);
 
     pub fn render_pipeline_descriptor(&self) -> RenderPipelineDescriptor {
@@ -320,7 +320,7 @@ impl InvalidNodePipeline {
     }
 }
 
-impl FromWorld for InvalidNodePipeline {
+impl FromWorld for DefaultNodePipeline {
     fn from_world(world: &mut World) -> Self {
         let pipeline_cache = world.resource::<PipelineCache>();
         let device = world.resource::<RenderDevice>();
@@ -471,7 +471,7 @@ pub fn queue_ui_nodes(
 
 pub fn prepare_ui_nodes(
     mut commands: Commands,
-    invalid_pipeline: Res<InvalidNodePipeline>,
+    invalid_pipeline: Res<DefaultNodePipeline>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     resources: ResMut<PreparedResources>,
@@ -548,7 +548,7 @@ pub struct BindInvalidPipeline;
 pub struct DrawUiPhaseItem;
 
 impl RenderCommand<UiNodeItem> for BindInvalidPipeline {
-    type Param = (SRes<PipelineCache>, SRes<InvalidNodePipeline>);
+    type Param = (SRes<PipelineCache>, SRes<DefaultNodePipeline>);
     type ItemQuery = ();
     type ViewQuery = ();
 
@@ -702,7 +702,7 @@ impl Plugin for UiRenderPlugin {
 
         load_internal_asset!(
             app,
-            InvalidNodePipeline::SHADER,
+            DefaultNodePipeline::SHADER,
             "invalid_node.wgsl",
             Shader::from_wgsl
         );
@@ -725,7 +725,7 @@ impl Plugin for UiRenderPlugin {
 
         render_app
             .init_resource::<ExtractedNodes>()
-            .init_resource::<InvalidNodePipeline>()
+            .init_resource::<DefaultNodePipeline>()
             .init_resource::<PreparedResources>()
             .init_resource::<DrawFunctions<UiNodeItem>>()
             .add_render_command::<UiNodeItem, InvalidNodeDrawFunction>()

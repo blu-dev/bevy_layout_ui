@@ -20,6 +20,28 @@ use serde_value::ValueDeserializer;
 #[cfg(feature = "editor-ui")]
 pub mod editor;
 
+#[macro_export]
+macro_rules! decl_node_label {
+    ($name:ident) => {
+        impl NodeLabel for $name {
+            fn dyn_clone(&self) -> Box<dyn $crate::NodeLabel> {
+                Box::new(self.clone())
+            }
+
+            fn as_dyn_eq(&self) -> &dyn bevy::utils::label::DynEq {
+                self
+            }
+
+            fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+                let ty_id = std::any::TypeId::of::<Self>();
+                std::hash::Hash::hash(&ty_id, &mut state);
+                std::hash::Hash::hash(self, &mut state);
+            }
+        }
+    };
+}
+
+pub mod builtins;
 pub mod loader;
 pub mod math;
 pub mod render;

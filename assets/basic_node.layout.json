@@ -1,39 +1,75 @@
 {
-  "resolution": [1920, 1080],
   "nodes": [
     {
-      "position": [380.0, 406.0],
-      "position_anchor": "TopLeft",
+      "children": [],
+      "node_data": {
+        "path": "images/sarina.png"
+      },
+      "node_kind": "Image",
       "parent_anchor": "TopLeft",
-      "size": [520.0, 50.0],
-      "scale": [1.0, 1.0],
+      "position": [
+        380.0,
+        406.0
+      ],
+      "position_anchor": "TopLeft",
       "rotation": 0.0,
-      "node_kind": "Basic",
-      "node_data": null,
-      "children": []
+      "scale": [
+        1.0,
+        1.0
+      ],
+      "size": [
+        520.0,
+        50.0
+      ]
     },
     {
-      "position": [375.0, 233.0],
-      "position_anchor": "TopLeft",
-      "parent_anchor": "TopLeft",
-      "size": [50.0, 50.0],
-      "scale": [1.0, 1.0],
-      "rotation": 291.0,
-      "node_kind": "Basic",
-      "node_data": null,
       "children": [
         {
-          "position": [180.0, 50.0],
-          "position_anchor": "TopLeft",
+          "children": [],
+          "node_data": {
+            "path": "images/test.png"
+          },
+          "node_kind": "Image",
           "parent_anchor": "TopLeft",
-          "size": [50.0, 50.0],
-          "scale": [1.0, 1.0],
+          "position": [
+            180.0,
+            50.0
+          ],
+          "position_anchor": "TopLeft",
           "rotation": 63.0,
-          "node_kind": "Basic",
-          "node_data": null,
-          "children": []
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            50.0,
+            50.0
+          ]
         }
+      ],
+      "node_data": {
+        "path": "images/test.png"
+      },
+      "node_kind": "Image",
+      "parent_anchor": "TopLeft",
+      "position": [
+        375.0,
+        233.0
+      ],
+      "position_anchor": "TopLeft",
+      "rotation": 291.0,
+      "scale": [
+        1.0,
+        1.0
+      ],
+      "size": [
+        50.0,
+        50.0
       ]
     }
+  ],
+  "resolution": [
+    1920,
+    1080
   ]
 }
