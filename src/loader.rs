@@ -170,7 +170,7 @@ impl VisitAssetDependencies for Layout {
 }
 
 #[derive(Component, Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DynamicNodeLabel(Interned<dyn NodeLabel>);
+pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 
 pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
     let root_node = world
@@ -225,6 +225,7 @@ fn spawn_layout_inner(
                 opacity: 1.0,
             },
             ZIndex(*z_index),
+            DynamicNodeLabel(node.label),
         ));
 
         (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);

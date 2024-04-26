@@ -89,8 +89,44 @@ pub struct RegisteredUiNode {
     visit_asset_dependencies: fn(&dyn Any, &mut dyn FnMut(UntypedAssetId)),
 }
 
-#[derive(Resource, Default, Deref, DerefMut)]
+#[cfg(feature = "editor-ui")]
+#[derive(Copy, Clone)]
+pub struct RegisteredEditorNode {
+    edit: fn(&mut EntityWorldMut, &mut egui::Ui),
+    init_default: fn(&mut EntityWorldMut),
+    cleanup: fn(&mut EntityWorldMut),
+}
+
+#[derive(Resource, Default, Deref, DerefMut, Clone)]
 pub struct UiNodeRegistry(Arc<RwLock<RegisteredUserUiNodes>>);
+
+#[cfg(feature = "editor-ui")]
+#[derive(Resource, Default, Deref, DerefMut, Clone)]
+pub struct EditorUiNodeRegistry(Arc<RwLock<RegisteredEditorUiNodes>>);
+
+#[cfg(feature = "editor-ui")]
+#[derive(Default)]
+pub struct RegisteredEditorUiNodes {
+    by_label: HashMap<Interned<dyn NodeLabel>, RegisteredEditorNode>,
+}
+
+impl RegisteredEditorUiNodes {
+    pub fn register<T: EditorUiNode>(&mut self) {
+        let label = T::label();
+        self.by_label.insert(
+            label,
+            RegisteredEditorNode {
+                edit: T::edit,
+                init_default: |entity| {
+                    let data = entity.world_scope(|world| T::from_world(world));
+
+                    data.spawn(entity);
+                },
+                cleanup: T::cleanup,
+            },
+        );
+    }
+}
 
 #[derive(Default)]
 pub struct RegisteredUserUiNodes {
@@ -133,7 +169,10 @@ impl RegisteredUserUiNodes {
 }
 
 #[cfg(feature = "editor-ui")]
-pub trait EditorUiNode: UserUiNode {}
+pub trait EditorUiNode: UserUiNode + FromWorld {
+    fn edit(entity: &mut EntityWorldMut, ui: &mut egui::Ui);
+    fn cleanup(entity: &mut EntityWorldMut);
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SystemSet)]
 pub enum UiLayoutSystem {
@@ -165,6 +204,11 @@ impl Plugin for UiLayoutPlugin {
 
         let resource = UiNodeRegistry::default();
 
+        #[cfg(feature = "editor-ui")]
+        {
+            app.init_resource::<EditorUiNodeRegistry>();
+        }
+
         app.register_asset_loader(LayoutAssetLoader {
             reader: resource.0.clone(),
         })
@@ -182,12 +226,24 @@ impl Plugin for UiLayoutPlugin {
 
 pub trait UiNodeApp {
     fn register_user_ui_node<T: UserUiNode>(&mut self) -> &mut Self;
+    #[cfg(feature = "editor-ui")]
+    fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self;
 }
 
 impl UiNodeApp for App {
     fn register_user_ui_node<T: UserUiNode>(&mut self) -> &mut Self {
         self.world
             .resource_mut::<UiNodeRegistry>()
+            .write()
+            .unwrap()
+            .register::<T>();
+
+        self
+    }
+
+    fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self {
+        self.world
+            .resource_mut::<EditorUiNodeRegistry>()
             .write()
             .unwrap()
             .register::<T>();
