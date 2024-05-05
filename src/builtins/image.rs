@@ -19,14 +19,13 @@ use bevy::{
     },
     utils::{intern::Interned, HashMap},
 };
-use egui::Id;
 use serde::{Deserialize, Serialize};
 
 use crate::render::{
     BindLayoutUniform, BindVertexBuffer, DefaultNodePipeline, DrawUiPhaseItem, NodeDrawFunction,
     SkipNodeRender, UiNodeItem,
 };
-use crate::{EditorUiNode, NodeLabel, UiNodeApp, UserUiNode};
+use crate::{NodeLabel, UiNodeApp, UserUiNode};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ImageNodeLabel;
@@ -91,9 +90,9 @@ impl UserUiNode for ImageNode {
 }
 
 #[cfg(feature = "editor-ui")]
-impl EditorUiNode for ImageNode {
+impl crate::EditorUiNode for ImageNode {
     fn edit(entity: &mut EntityWorldMut, ui: &mut egui::Ui) {
-        let id = Id::new("image-node-editor").with(entity.id());
+        let id = egui::Id::new("image-node-editor").with(entity.id());
         let mut current_path = ui.data_mut(|data| {
             data.get_temp_mut_or_insert_with(id, || {
                 let handle = entity.get::<ImageNode>().unwrap().image.id();

@@ -22,7 +22,6 @@ use bevy::{
 };
 use bytemuck::{Pod, Zeroable};
 use cosmic_text::{Attrs, Family, FontSystem, Metrics, Shaping, SwashCache};
-use egui::DragValue;
 use serde::{Deserialize, Serialize};
 
 use crate::math::NodeSize;
@@ -30,7 +29,7 @@ use crate::render::{
     BindLayoutUniform, BindVertexBuffer, DefaultNodePipeline, NodeDrawFunction, SkipNodeRender,
     UiNodeItem,
 };
-use crate::{EditorUiNode, NodeLabel, UiNodeApp, UserUiNode};
+use crate::{NodeLabel, UiNodeApp, UserUiNode};
 
 use self::buffer_glyph::BufferGlyphMaps;
 
@@ -127,7 +126,7 @@ impl UserUiNode for TextNode {
 }
 
 #[cfg(feature = "editor-ui")]
-impl EditorUiNode for TextNode {
+impl crate::EditorUiNode for TextNode {
     fn edit(entity: &mut EntityWorldMut, ui: &mut egui::Ui) {
         let mut text_node = entity.get_mut::<TextNode>().unwrap();
 
@@ -138,7 +137,7 @@ impl EditorUiNode for TextNode {
 
         ui.horizontal(|ui| {
             ui.label("Font Size");
-            ui.add(DragValue::new(&mut text_node.font_size));
+            ui.add(egui::DragValue::new(&mut text_node.font_size));
         });
 
         ui.horizontal(|ui| {

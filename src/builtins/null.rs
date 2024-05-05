@@ -1,6 +1,6 @@
 use bevy::{app::Plugin, ecs::component::Component, reflect::Reflect, utils::intern::Interned};
 
-use crate::{render::SkipNodeRender, EditorUiNode, NodeLabel, UiNodeApp, UserUiNode};
+use crate::{render::SkipNodeRender, NodeLabel, UiNodeApp, UserUiNode};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct NullNodeLabel;
@@ -44,7 +44,7 @@ impl UserUiNode for NullNode {
 }
 
 #[cfg(feature = "editor-ui")]
-impl EditorUiNode for NullNode {
+impl crate::EditorUiNode for NullNode {
     fn edit(_: &mut bevy::prelude::EntityWorldMut, _: &mut egui::Ui) {}
 
     fn cleanup(entity: &mut bevy::prelude::EntityWorldMut) {

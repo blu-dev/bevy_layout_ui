@@ -17,6 +17,8 @@ use serde::{
 };
 use serde_value::ValueDeserializer;
 
+pub mod animations;
+
 #[cfg(feature = "editor-ui")]
 pub mod editor;
 
@@ -132,6 +134,7 @@ pub struct RegisteredEditorUiNodes {
     by_label: HashMap<Interned<dyn NodeLabel>, RegisteredEditorNode>,
 }
 
+#[cfg(feature = "editor-ui")]
 impl RegisteredEditorUiNodes {
     pub fn register<T: EditorUiNode>(&mut self) {
         let label = T::label();
@@ -263,6 +266,7 @@ impl UiNodeApp for App {
         self
     }
 
+    #[cfg(feature = "editor-ui")]
     fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self {
         self.world
             .resource_mut::<EditorUiNodeRegistry>()
