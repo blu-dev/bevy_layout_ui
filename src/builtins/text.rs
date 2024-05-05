@@ -21,9 +21,8 @@ use bevy::{
     utils::intern::Interned,
 };
 use bytemuck::{Pod, Zeroable};
-use cosmic_text::fontdb::ID;
 use cosmic_text::{Attrs, Family, FontSystem, Metrics, Shaping, SwashCache};
-use egui::{DragValue, Id};
+use egui::DragValue;
 use serde::{Deserialize, Serialize};
 
 use crate::math::NodeSize;
@@ -231,11 +230,9 @@ impl FromWorld for TextNodePipeline {
 
 fn extract_text_nodes(
     nodes: Extract<Query<(Entity, &TextNode, &NodeSize), Without<SkipNodeRender>>>,
-    font_system: Res<CosmicFontSystem>,
     mut extracted: ResMut<ExtractedTextNodes>,
 ) {
     extracted.clear();
-    let db = font_system.0.db();
     for (entity, node, node_size) in nodes.iter() {
         extracted.insert(
             entity,
@@ -382,7 +379,7 @@ impl RenderCommand<UiNodeItem> for BindTextPipeline {
     type ItemQuery = ();
 
     fn render<'w>(
-        item: &UiNodeItem,
+        _item: &UiNodeItem,
         _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
         _entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
         (pipeline, cache): bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
@@ -409,9 +406,9 @@ impl<const I: usize> RenderCommand<UiNodeItem> for BindTextNodeVertexBuffer<I> {
     type ItemQuery = ();
 
     fn render<'w>(
-        item: &UiNodeItem,
-        view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
-        entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
+        _item: &UiNodeItem,
+        _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
         param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
@@ -431,9 +428,9 @@ impl RenderCommand<UiNodeItem> for BindTextNodeIndexBuffer {
     type ItemQuery = ();
 
     fn render<'w>(
-        item: &UiNodeItem,
-        view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
-        entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
+        _item: &UiNodeItem,
+        _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
+        _entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
         param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
@@ -457,10 +454,10 @@ impl<const I: usize> RenderCommand<UiNodeItem> for BindGlyphGroup<I> {
     type ItemQuery = &'static PreparedTextNode;
 
     fn render<'w>(
-        item: &UiNodeItem,
-        view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
+        _item: &UiNodeItem,
+        _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
         entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
-        param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
+        _param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let Some(prepared) = entity else {
@@ -483,9 +480,9 @@ impl RenderCommand<UiNodeItem> for DrawTextNode {
 
     fn render<'w>(
         item: &UiNodeItem,
-        view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
+        _view: bevy::ecs::query::ROQueryItem<'w, Self::ViewQuery>,
         entity: Option<bevy::ecs::query::ROQueryItem<'w, Self::ItemQuery>>,
-        param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
+        _param: bevy::ecs::system::SystemParamItem<'w, '_, Self::Param>,
         pass: &mut bevy::render::render_phase::TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let Some(prepared) = entity else {
