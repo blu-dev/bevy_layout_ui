@@ -262,7 +262,7 @@ impl NodeDrawFunction {
 /// The default draw function for nodes
 ///
 /// This function should only be used when a user has forgotten to explicitly set the node
-pub type InvalidNodeDrawFunction = (
+pub type DefaultNodeDrawFunction = (
     BindVertexBuffer<0>,
     BindLayoutUniform<0>,
     BindInvalidPipeline,
@@ -453,7 +453,7 @@ pub fn queue_ui_nodes(
 ) {
     let function = draw_functions
         .read()
-        .get_id::<InvalidNodeDrawFunction>()
+        .get_id::<DefaultNodeDrawFunction>()
         .unwrap();
     for mut phase in ui_phases.iter_mut() {
         for (entity, node) in nodes.iter() {
@@ -703,7 +703,7 @@ impl Plugin for UiRenderPlugin {
         load_internal_asset!(
             app,
             DefaultNodePipeline::SHADER,
-            "invalid_node.wgsl",
+            "default_node.wgsl",
             Shader::from_wgsl
         );
 
@@ -728,7 +728,7 @@ impl Plugin for UiRenderPlugin {
             .init_resource::<DefaultNodePipeline>()
             .init_resource::<PreparedResources>()
             .init_resource::<DrawFunctions<UiNodeItem>>()
-            .add_render_command::<UiNodeItem, InvalidNodeDrawFunction>()
+            .add_render_command::<UiNodeItem, DefaultNodeDrawFunction>()
             .add_systems(ExtractSchedule, extract_ui_phases)
             .add_systems(ExtractSchedule, extract_nodes)
             .add_systems(
