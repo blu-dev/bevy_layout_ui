@@ -296,7 +296,7 @@ impl DefaultNodePipeline {
                 buffers: vec![NodeVertexInput::layout()],
             },
             primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
+                topology: PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: FrontFace::Ccw,
                 cull_mode: None,
@@ -329,7 +329,7 @@ impl FromWorld for DefaultNodePipeline {
             "InvalidNodePipeline.LayoutUniformLayout",
             &[BindGroupLayoutEntry {
                 binding: 0,
-                visibility: ShaderStages::VERTEX,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: true,

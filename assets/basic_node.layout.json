@@ -3,24 +3,17 @@
     {
       "children": [],
       "node_data": {
-        "path": "images/sarina.png"
+        "font_face": "Comic Code",
+        "font_size": 32,
+        "text": "Hello World!"
       },
-      "node_kind": "Image",
+      "node_kind": "Text",
       "parent_anchor": "TopLeft",
-      "position": [
-        380.0,
-        406.0
-      ],
+      "position": [380.0, 406.0],
       "position_anchor": "TopLeft",
       "rotation": 0.0,
-      "scale": [
-        1.0,
-        1.0
-      ],
-      "size": [
-        520.0,
-        50.0
-      ]
+      "scale": [1.0, 1.0],
+      "size": [300.0, 300.0]
     },
     {
       "children": [
@@ -31,20 +24,11 @@
           },
           "node_kind": "Image",
           "parent_anchor": "TopLeft",
-          "position": [
-            180.0,
-            50.0
-          ],
+          "position": [180.0, 50.0],
           "position_anchor": "TopLeft",
           "rotation": 63.0,
-          "scale": [
-            1.0,
-            1.0
-          ],
-          "size": [
-            50.0,
-            50.0
-          ]
+          "scale": [1.0, 1.0],
+          "size": [50.0, 50.0]
         }
       ],
       "node_data": {
@@ -52,24 +36,12 @@
       },
       "node_kind": "Image",
       "parent_anchor": "TopLeft",
-      "position": [
-        375.0,
-        233.0
-      ],
+      "position": [375.0, 233.0],
       "position_anchor": "TopLeft",
       "rotation": 291.0,
-      "scale": [
-        1.0,
-        1.0
-      ],
-      "size": [
-        50.0,
-        50.0
-      ]
+      "scale": [1.0, 1.0],
+      "size": [50.0, 50.0]
     }
   ],
-  "resolution": [
-    1920,
-    1080
-  ]
+  "resolution": [1920, 1080]
 }

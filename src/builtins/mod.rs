@@ -2,6 +2,7 @@ use bevy::app::{PluginGroup, PluginGroupBuilder};
 
 pub mod image;
 pub mod null;
+pub mod text;
 
 pub struct DefaultNodePluginGroup;
 
@@ -10,5 +11,6 @@ impl PluginGroup for DefaultNodePluginGroup {
         PluginGroupBuilder::start::<Self>()
             .add(null::NullNodePlugin)
             .add(image::ImageNodePlugin)
+            .add(text::TextNodePlugin)
     }
 }

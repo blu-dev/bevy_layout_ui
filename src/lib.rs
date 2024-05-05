@@ -23,7 +23,7 @@ pub mod editor;
 #[macro_export]
 macro_rules! decl_node_label {
     ($name:ident) => {
-        impl NodeLabel for $name {
+        impl $crate::NodeLabel for $name {
             fn dyn_clone(&self) -> Box<dyn $crate::NodeLabel> {
                 Box::new(self.clone())
             }

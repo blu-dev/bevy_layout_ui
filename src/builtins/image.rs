@@ -129,7 +129,7 @@ impl EditorUiNode for ImageNode {
 struct ExtractedImageNodes(EntityHashMap<AssetId<Image>>);
 
 #[derive(Resource)]
-struct ImageNodePipeline {
+pub struct ImageNodePipeline {
     pipeline_id: CachedRenderPipelineId,
     image_bind_group: BindGroupLayout,
 }
@@ -189,7 +189,7 @@ fn extract_image_nodes(
 }
 
 #[derive(Resource, Default, Deref, DerefMut)]
-struct PreparedImages(HashMap<AssetId<Image>, BindGroup>);
+pub struct PreparedImages(HashMap<AssetId<Image>, BindGroup>);
 
 fn prepare_image_nodes(
     mut commands: Commands,
@@ -238,7 +238,7 @@ fn prepare_image_nodes(
     commands.insert_or_spawn_batch(std::mem::replace(&mut *batch, new_batch));
 }
 
-type ImageNodeDrawFunction = (
+pub type ImageNodeDrawFunction = (
     BindImagePipeline,
     BindVertexBuffer<0>,
     BindLayoutUniform<0>,
@@ -247,9 +247,9 @@ type ImageNodeDrawFunction = (
 );
 
 #[derive(Component)]
-struct ImageId(AssetId<Image>);
+pub struct ImageId(AssetId<Image>);
 
-struct BindImagePipeline;
+pub struct BindImagePipeline;
 
 impl RenderCommand<UiNodeItem> for BindImagePipeline {
     type Param = (SRes<ImageNodePipeline>, SRes<PipelineCache>);
@@ -275,7 +275,7 @@ impl RenderCommand<UiNodeItem> for BindImagePipeline {
     }
 }
 
-struct BindImageGroup<const I: usize>;
+pub struct BindImageGroup<const I: usize>;
 
 impl<const I: usize> RenderCommand<UiNodeItem> for BindImageGroup<I> {
     type Param = SRes<PreparedImages>;
