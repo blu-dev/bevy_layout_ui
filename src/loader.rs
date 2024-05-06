@@ -308,7 +308,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
         layout.resolution,
         &layout.nodes,
         &mut 1isize,
-        "root".to_string(),
+        Some("root".to_string()),
     );
 
     root_node
@@ -320,10 +320,13 @@ fn spawn_layout_inner(
     resolution: UVec2,
     nodes: &[UiNode],
     z_index: &mut isize,
-    parent_node: String,
+    parent_node: Option<String>,
 ) {
     for node in nodes.iter() {
-        let node_name = format!("{parent_node}.{}", node.name);
+        let node_name = match parent_node.as_ref() {
+            Some(name) => format!("{name}.{}", node.name),
+            None => node.name.clone(),
+        };
         let mut entity = world.spawn((
             Transform::from_position(node.attributes.position)
                 .with_scale(node.attributes.scale)
@@ -353,7 +356,7 @@ fn spawn_layout_inner(
             resolution,
             &node.children,
             z_index,
-            node_name,
+            Some(node_name),
         );
         world.entity_mut(root_entity).add_child(node_id);
     }

@@ -86,7 +86,6 @@ impl Default for TextNode {
 
 impl UserUiNode for TextNode {
     const NAME: &'static str = "Text";
-    type AnimationId = ();
     type Serde = TextNodeData;
 
     fn label() -> Interned<dyn NodeLabel> {

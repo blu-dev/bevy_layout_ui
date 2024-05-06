@@ -87,9 +87,6 @@ pub trait UserUiNode: Send + Sized + Sync + 'static {
     /// Data type that gets serialized into/deserialized from the layout JSON files
     type Serde: Serialize + DeserializeOwned + Send + Sync + 'static;
 
-    /// ID that identifies an animatable quality of this node
-    type AnimationId: Eq + Hash + Send + Sync + 'static;
-
     /// Returns a unique label that can be associated with this UI node
     ///
     /// This label will be used to ensure that when serializing nodes, we are only calling

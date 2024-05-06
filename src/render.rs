@@ -9,6 +9,7 @@ use bevy::ecs::system::lifetimeless::SRes;
 use bevy::ecs::system::SystemParamItem;
 use bevy::math::Affine2;
 use bevy::prelude::*;
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_graph::{RenderGraphApp, RenderLabel, ViewNode, ViewNodeRunner};
 use bevy::render::render_phase::{
@@ -638,6 +639,7 @@ impl RenderCommand<UiNodeItem> for DrawUiPhaseItem {
 impl ViewNode for UiLayoutNode {
     type ViewQuery = (
         Entity,
+        &'static ExtractedCamera,
         &'static ViewTarget,
         &'static RenderPhase<UiNodeItem>,
     );
@@ -646,7 +648,7 @@ impl ViewNode for UiLayoutNode {
         &self,
         _: &mut bevy::render::render_graph::RenderGraphContext,
         render_context: &mut bevy::render::renderer::RenderContext<'w>,
-        (entity, target, phase): bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
+        (entity, camera, target, phase): bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), bevy::render::render_graph::NodeRunError> {
         let draw_functions = world.resource::<DrawFunctions<UiNodeItem>>();
@@ -672,6 +674,10 @@ impl ViewNode for UiLayoutNode {
             });
 
             let mut pass = TrackedRenderPass::new(&device, rpass);
+
+            if let Some(viewport) = camera.viewport.as_ref() {
+                pass.set_camera_viewport(viewport);
+            }
 
             let mut draw_functions = draw_functions.write();
             for item in phase.items.iter() {

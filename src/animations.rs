@@ -23,7 +23,7 @@ use serde::{de::DeserializeOwned, ser::Error, Deserialize, Serialize};
 use serde_json::Error as JsonError;
 use serde_value::ValueDeserializer;
 
-use crate::{loader::DynamicNodeLabel, NodeLabel};
+use crate::{builtins::sublayout::SpawnedSublayout, loader::DynamicNodeLabel, NodeLabel};
 
 pub trait AnimationTarget: Send + Sized + Sync + 'static {
     const NAME: &'static str;
@@ -360,8 +360,12 @@ pub fn collect_nodes_by_name(
             .flat_map(map_children);
         loop {
             while let Some(next_child) = children.next() {
+                let next = world.entity(next_child);
+                if next.contains::<SpawnedSublayout>() {
+                    continue;
+                }
                 children_stack.push((children, current_entity.id()));
-                current_entity = world.entity(next_child);
+                current_entity = next;
                 children = current_entity
                     .get::<Children>()
                     .into_iter()

@@ -29,10 +29,14 @@ fn wait_spawn_layout(layout: Res<WaitingLayout>, server: Res<AssetServer>, mut c
     if server.load_state(layout.0.id()) == LoadState::Loaded {
         commands.add(move |world: &mut World| {
             let handle = world.remove_resource::<WaitingLayout>().unwrap().0;
-            world.resource_scope::<Assets<Layout>, _>(|world, assets| {
-                let layout = assets.get(&handle).unwrap();
-                bevy_layout_ui::loader::spawn_layout(world, layout);
-            });
+            let layout = world
+                .resource_mut::<Assets<Layout>>()
+                .remove(&handle)
+                .unwrap();
+            bevy_layout_ui::loader::spawn_layout(world, &layout);
+            world
+                .resource_mut::<Assets<Layout>>()
+                .insert(handle, layout);
         });
     }
 }

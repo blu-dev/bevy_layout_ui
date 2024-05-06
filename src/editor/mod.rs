@@ -5,6 +5,7 @@ use egui::{
 
 use crate::{
     animations::UiLayoutAnimationController,
+    builtins::sublayout::SpawnedSublayout,
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{UiNodeSettings, VertexColors},
 };
@@ -131,6 +132,21 @@ pub fn display_node_tree(
                     &[dragging],
                 );
             } else {
+                let parent_name = parent.get::<Name>().unwrap().to_string();
+                parent.world_scope(|world| {
+                    let local_name = world
+                        .get::<Name>(dragging)
+                        .unwrap()
+                        .as_str()
+                        .split('.')
+                        .last()
+                        .unwrap()
+                        .to_string();
+                    world
+                        .get_mut::<Name>(dragging)
+                        .unwrap()
+                        .set(format!("{parent_name}.{local_name}"));
+                });
                 parent.insert_children(new_child_no, &[dragging]);
             }
         }
@@ -195,6 +211,9 @@ fn display_node_tree_impl(
                 let mut total_number_children = 0;
                 let mut resp = if let Some(children) = world.get::<Children>(root_entity) {
                     children.iter().copied().fold(None, |selected, item| {
+                        if world.get::<SpawnedSublayout>(item).is_some() {
+                            return selected;
+                        }
                         if dragging.is_some() && tracker.location.is_none() {
                             if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
                                 if hover_pos.y < ui.cursor().min.y {
@@ -234,10 +253,12 @@ fn display_node_tree_impl(
                 }
 
                 if add_button(ui).clicked() {
+                    let parent_name = world.get::<Name>(root_entity).unwrap().to_string();
                     commands.entity(root_entity).with_children(|children| {
                         resp = Some(
                             children
                                 .spawn((
+                                    Name::new(format!("{parent_name}.New Node")),
                                     Transform::new(),
                                     GlobalTransform::default(),
                                     Anchor::TopLeft,

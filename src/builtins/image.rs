@@ -44,7 +44,6 @@ pub struct ImageNode {
 
 impl UserUiNode for ImageNode {
     const NAME: &'static str = "Image";
-    type AnimationId = ();
     type Serde = ImageNodeData;
 
     fn label() -> Interned<dyn NodeLabel> {

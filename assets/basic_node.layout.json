@@ -8,24 +8,15 @@
             {
               "interpolation": "Linear",
               "timestamp_ms": 200,
-              "value": [
-                1300.0,
-                15000.0
-              ]
+              "value": [1300.0, 15000.0]
             },
             {
               "interpolation": "Linear",
               "timestamp_ms": 500,
-              "value": [
-                1428.0,
-                100.0
-              ]
+              "value": [1428.0, 100.0]
             }
           ],
-          "starting_value": [
-            100.0,
-            100.0
-          ]
+          "starting_value": [100.0, 100.0]
         }
       }
     }
@@ -33,28 +24,17 @@
   "nodes": [
     {
       "children": [],
-      "name": "Text Node",
+      "name": "Sublayout Node",
       "node_data": {
-        "font_face": "Comic Code",
-        "font_size": 32,
-        "text": "Hello World!"
+        "layout_path": "sublayout.layout.json"
       },
-      "node_kind": "Text",
+      "node_kind": "Sublayout",
       "parent_anchor": "TopLeft",
-      "position": [
-        380.0,
-        406.0
-      ],
+      "position": [180.0, 50.0],
       "position_anchor": "TopLeft",
       "rotation": 0.0,
-      "scale": [
-        1.0,
-        1.0
-      ],
-      "size": [
-        300.0,
-        300.0
-      ]
+      "scale": [1.0, 1.0],
+      "size": [50.0, 50.0]
     },
     {
       "children": [
@@ -66,20 +46,11 @@
           },
           "node_kind": "Image",
           "parent_anchor": "TopLeft",
-          "position": [
-            180.0,
-            50.0
-          ],
+          "position": [180.0, 50.0],
           "position_anchor": "TopLeft",
           "rotation": 63.0,
-          "scale": [
-            1.0,
-            1.0
-          ],
-          "size": [
-            50.0,
-            50.0
-          ]
+          "scale": [1.0, 1.0],
+          "size": [50.0, 50.0]
         }
       ],
       "name": "Image Node 1",
@@ -88,24 +59,12 @@
       },
       "node_kind": "Image",
       "parent_anchor": "TopLeft",
-      "position": [
-        657.0,
-        233.0
-      ],
+      "position": [657.0, 233.0],
       "position_anchor": "TopLeft",
       "rotation": 0.0,
-      "scale": [
-        1.0,
-        1.0
-      ],
-      "size": [
-        100.0,
-        100.0
-      ]
+      "scale": [1.0, 1.0],
+      "size": [100.0, 100.0]
     }
   ],
-  "resolution": [
-    1920,
-    1080
-  ]
+  "resolution": [1920, 1080]
 }

@@ -1,0 +1,22 @@
+{
+  "animations": {},
+  "nodes": [
+    {
+      "children": [],
+      "name": "Text Node",
+      "node_data": {
+        "font_face": "Comic Code",
+        "font_size": 32,
+        "text": "Hello World!"
+      },
+      "node_kind": "Text",
+      "parent_anchor": "TopLeft",
+      "position": [380.0, 406.0],
+      "position_anchor": "TopLeft",
+      "rotation": 0.0,
+      "scale": [1.0, 1.0],
+      "size": [300.0, 300.0]
+    }
+  ],
+  "resolution": [1920, 1080]
+}
