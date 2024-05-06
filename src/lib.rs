@@ -1,8 +1,10 @@
 use std::{
     any::Any,
+    hash::Hash,
     sync::{Arc, RwLock},
 };
 
+use animations::{AnimationTarget, AnimationTargetRegistry};
 use bevy::{
     app::{Plugin, PostUpdate},
     asset::{LoadContext, UntypedAssetId},
@@ -16,8 +18,6 @@ use serde::{
     Deserialize, Serialize,
 };
 use serde_value::ValueDeserializer;
-
-pub mod animations;
 
 #[cfg(feature = "editor-ui")]
 pub mod editor;
@@ -43,6 +43,28 @@ macro_rules! decl_node_label {
     };
 }
 
+#[macro_export]
+macro_rules! decl_animation_label {
+    ($name:ident) => {
+        impl $crate::animations::AnimationTargetLabel for $name {
+            fn dyn_clone(&self) -> Box<dyn $crate::animations::AnimationTargetLabel> {
+                Box::new(self.clone())
+            }
+
+            fn as_dyn_eq(&self) -> &dyn bevy::utils::label::DynEq {
+                self
+            }
+
+            fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+                let ty_id = std::any::TypeId::of::<Self>();
+                std::hash::Hash::hash(&ty_id, &mut state);
+                std::hash::Hash::hash(self, &mut state);
+            }
+        }
+    };
+}
+
+pub mod animations;
 pub mod builtins;
 pub mod loader;
 pub mod math;
@@ -61,6 +83,9 @@ pub trait UserUiNode: Send + Sized + Sync + 'static {
 
     /// Data type that gets serialized into/deserialized from the layout JSON files
     type Serde: Serialize + DeserializeOwned + Send + Sync + 'static;
+
+    /// ID that identifies an animatable quality of this node
+    type AnimationId: Eq + Hash + Send + Sync + 'static;
 
     /// Returns a unique label that can be associated with this UI node
     ///
@@ -201,6 +226,7 @@ pub trait EditorUiNode: UserUiNode + FromWorld {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SystemSet)]
 pub enum UiLayoutSystem {
+    UpdateAnimations,
     PropagateTransforms,
     ComputeBoundingBoxes,
 }
@@ -212,6 +238,7 @@ impl Plugin for UiLayoutPlugin {
         app.configure_sets(
             PostUpdate,
             (
+                UiLayoutSystem::UpdateAnimations,
                 UiLayoutSystem::PropagateTransforms,
                 UiLayoutSystem::ComputeBoundingBoxes,
             )
@@ -220,6 +247,7 @@ impl Plugin for UiLayoutPlugin {
         app.add_systems(
             PostUpdate,
             (
+                animations::update_animations.in_set(UiLayoutSystem::UpdateAnimations),
                 (math::sync_simple_transforms, math::propagate_transforms)
                     .chain()
                     .in_set(UiLayoutSystem::PropagateTransforms),
@@ -227,7 +255,8 @@ impl Plugin for UiLayoutPlugin {
             ),
         );
 
-        let resource = UiNodeRegistry::default();
+        let node_reg = UiNodeRegistry::default();
+        let target_reg = AnimationTargetRegistry::default();
 
         #[cfg(feature = "editor-ui")]
         {
@@ -235,10 +264,12 @@ impl Plugin for UiLayoutPlugin {
         }
 
         app.register_asset_loader(LayoutAssetLoader {
-            reader: resource.0.clone(),
+            ui_node_registry: node_reg.0.clone(),
+            ui_animation_registry: target_reg.0.clone(),
         })
         .init_asset::<Layout>()
-        .insert_resource(resource)
+        .insert_resource(node_reg)
+        .insert_resource(target_reg)
         .register_type::<math::Transform>()
         .register_type::<math::GlobalTransform>()
         .register_type::<math::BoundingBox>()
@@ -251,6 +282,7 @@ impl Plugin for UiLayoutPlugin {
 
 pub trait UiNodeApp {
     fn register_user_ui_node<T: UserUiNode>(&mut self) -> &mut Self;
+    fn register_animation_target<T: AnimationTarget>(&mut self) -> &mut Self;
     #[cfg(feature = "editor-ui")]
     fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self;
 }
@@ -258,7 +290,17 @@ pub trait UiNodeApp {
 impl UiNodeApp for App {
     fn register_user_ui_node<T: UserUiNode>(&mut self) -> &mut Self {
         self.world
-            .resource_mut::<UiNodeRegistry>()
+            .resource::<UiNodeRegistry>()
+            .write()
+            .unwrap()
+            .register::<T>();
+
+        self
+    }
+
+    fn register_animation_target<T: AnimationTarget>(&mut self) -> &mut Self {
+        self.world
+            .resource::<AnimationTargetRegistry>()
             .write()
             .unwrap()
             .register::<T>();

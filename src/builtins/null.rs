@@ -13,6 +13,7 @@ pub struct NullNode;
 impl UserUiNode for NullNode {
     const NAME: &'static str = "Null";
 
+    type AnimationId = ();
     type Serde = ();
 
     fn label() -> Interned<dyn NodeLabel> {

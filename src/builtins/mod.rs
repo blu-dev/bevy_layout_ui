@@ -1,5 +1,6 @@
 use bevy::app::{PluginGroup, PluginGroupBuilder};
 
+pub mod animations;
 pub mod image;
 pub mod null;
 pub mod text;
@@ -12,5 +13,6 @@ impl PluginGroup for DefaultNodePluginGroup {
             .add(null::NullNodePlugin)
             .add(image::ImageNodePlugin)
             .add(text::TextNodePlugin)
+            .add(animations::BuiltinAnimationsPlugin)
     }
 }

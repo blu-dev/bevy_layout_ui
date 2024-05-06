@@ -5,17 +5,23 @@ use std::{
 
 use bevy::{
     asset::{Asset, AssetLoader, AsyncReadExt, LoadContext, VisitAssetDependencies},
+    core::Name,
     ecs::{component::Component, entity::Entity, world::World},
     hierarchy::{BuildWorldChildren, Children, Parent},
     math::{UVec2, Vec2},
     reflect::{Reflect, TypePath},
     sprite::Anchor,
-    utils::intern::Interned,
+    utils::{intern::Interned, HashMap},
 };
-use serde::{Deserialize, Serialize};
+use serde::{ser::Error, Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    animations::{
+        Animation, AnimationIdLane, AnimationKeyframe, AnimationNodeLane, AnimationPlaybackState,
+        AnimationTargetRegistry, EdgeInterpolation, PlaybackData, RegisteredAnimationTargets,
+        UiLayoutAnimationController,
+    },
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{SkipNodeRender, UiNodeSettings, VertexColors},
     NodeLabel, RegisteredUiNode, RegisteredUserUiNodes, UiNodeRegistry,
@@ -23,7 +29,8 @@ use crate::{
 
 #[derive(Default)]
 pub struct LayoutAssetLoader {
-    pub(crate) reader: Arc<RwLock<RegisteredUserUiNodes>>,
+    pub(crate) ui_node_registry: Arc<RwLock<RegisteredUserUiNodes>>,
+    pub(crate) ui_animation_registry: Arc<RwLock<RegisteredAnimationTargets>>,
 }
 
 #[derive(Error, Debug)]
@@ -34,6 +41,63 @@ pub enum LayoutAssetLoaderError {
     JSON(#[from] serde_json::Error),
     #[error("Node kind {0} is missing from the registry")]
     MissingNode(String),
+    #[error("AnimationTarget {0} is missing from the registry")]
+    MissingAnimationTarget(String),
+}
+
+fn parse_animations(
+    repr: HashMap<String, UiAnimationRepr>,
+    registry: &RegisteredAnimationTargets,
+) -> Result<HashMap<String, Arc<Animation>>, LayoutAssetLoaderError> {
+    let mut animations = HashMap::new();
+    for (name, animation_repr) in repr {
+        let mut animation = Animation {
+            animation_by_node: HashMap::new(),
+        };
+
+        for (node_name, lane) in animation_repr.0 {
+            let mut animation_lanes = HashMap::new();
+            for (target_name, lane) in lane.0 {
+                let label = registry.by_name.get(target_name.as_str()).ok_or_else(|| {
+                    LayoutAssetLoaderError::MissingAnimationTarget(target_name.clone())
+                })?;
+                let registered = registry.by_label.get(label).unwrap();
+                let animation_data = (registered.deserialize)(lane.data)?;
+                let starting_value = (registered.deserialize_content)(lane.starting_value)?;
+                let keyframes = lane
+                    .edges
+                    .into_iter()
+                    .map(|edge| {
+                        let value = (registered.deserialize_content)(edge.value)?;
+                        Ok(AnimationKeyframe {
+                            timestamp_ms: edge.timestamp_ms,
+                            edge_interpolation: edge.interpolation,
+                            value,
+                        })
+                    })
+                    .collect::<Result<Vec<AnimationKeyframe>, LayoutAssetLoaderError>>()?;
+
+                animation_lanes.insert(
+                    label.clone(),
+                    AnimationIdLane {
+                        animation_data,
+                        starting_value,
+                        keyframes,
+                    },
+                );
+            }
+            animation.animation_by_node.insert(
+                node_name,
+                AnimationNodeLane {
+                    animation_by_id: animation_lanes,
+                },
+            );
+        }
+
+        animations.insert(name, Arc::new(animation));
+    }
+
+    Ok(animations)
 }
 
 fn parse_nodes(
@@ -52,6 +116,7 @@ fn parse_nodes(
 
         let data = registry.by_label.get(label).unwrap();
         nodes.push(UiNode {
+            name: node_repr.name,
             attributes: node_repr.attributes,
             label: label.clone(),
             data: (data.deserialize)(node_repr.node_data, load_context)?,
@@ -84,13 +149,16 @@ impl AssetLoader for LayoutAssetLoader {
             let repr: LayoutRepr =
                 serde_json::from_slice(&bytes).map_err(LayoutAssetLoaderError::from)?;
 
-            let registry = self.reader.read().unwrap();
+            let node_reg = self.ui_node_registry.read().unwrap();
+            let anim_reg = self.ui_animation_registry.read().unwrap();
 
-            let nodes = parse_nodes(repr.nodes, &registry, load_context)?;
+            let nodes = parse_nodes(repr.nodes, &node_reg, load_context)?;
+            let animations = parse_animations(repr.animations, &anim_reg)?;
 
             Ok(Layout {
                 resolution: repr.resolution,
                 nodes,
+                animations,
             })
         })
     }
@@ -112,6 +180,7 @@ enum AnchorLocal {
 }
 
 pub struct UiNode {
+    pub name: String,
     pub attributes: UiNodeAttributes,
     pub label: Interned<dyn NodeLabel>,
     pub data: Box<dyn Any + Send + Sync + 'static>,
@@ -121,6 +190,7 @@ pub struct UiNode {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct UiNodeRepr {
+    name: String,
     #[serde(flatten)]
     attributes: UiNodeAttributes,
     children: Vec<UiNodeRepr>,
@@ -128,10 +198,31 @@ struct UiNodeRepr {
     node_data: serde_value::Value,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct UiNodeAnimationLaneEdge {
+    timestamp_ms: u32,
+    interpolation: EdgeInterpolation,
+    value: serde_value::Value,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct UiAnimationLane {
+    data: serde_value::Value,
+    starting_value: serde_value::Value,
+    edges: Vec<UiNodeAnimationLaneEdge>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct UiNodeAnimationLane(HashMap<String, UiAnimationLane>);
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct UiAnimationRepr(HashMap<String, UiNodeAnimationLane>);
+
 #[derive(Deserialize, Serialize)]
 struct LayoutRepr {
     resolution: UVec2,
     nodes: Vec<UiNodeRepr>,
+    animations: HashMap<String, UiAnimationRepr>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
@@ -151,6 +242,7 @@ pub struct UiNodeAttributes {
 pub struct Layout {
     pub resolution: UVec2,
     pub nodes: Vec<UiNode>,
+    pub animations: HashMap<String, Arc<Animation>>,
 }
 
 impl Asset for Layout {}
@@ -175,6 +267,7 @@ pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
     let root_node = world
         .spawn((
+            Name::new("root"),
             Transform::from_position(Vec2::ZERO)
                 .with_scale(Vec2::ONE)
                 .with_rotation(0.0)
@@ -189,6 +282,22 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
             },
             ZIndex(0),
             SkipNodeRender,
+            UiLayoutAnimationController {
+                animations: layout
+                    .animations
+                    .iter()
+                    .map(|(name, anim)| {
+                        (
+                            name.clone(),
+                            AnimationPlaybackState {
+                                animation: anim.clone(),
+                                data: PlaybackData::NotPlaying,
+                                requests: vec![],
+                            },
+                        )
+                    })
+                    .collect(),
+            },
         ))
         .id();
 
@@ -198,6 +307,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
         layout.resolution,
         &layout.nodes,
         &mut 1isize,
+        "root".to_string(),
     );
 
     root_node
@@ -209,8 +319,10 @@ fn spawn_layout_inner(
     resolution: UVec2,
     nodes: &[UiNode],
     z_index: &mut isize,
+    parent_node: String,
 ) {
     for node in nodes.iter() {
+        let node_name = format!("{parent_node}.{}", node.name);
         let mut entity = world.spawn((
             Transform::from_position(node.attributes.position)
                 .with_scale(node.attributes.scale)
@@ -226,6 +338,7 @@ fn spawn_layout_inner(
             },
             ZIndex(*z_index),
             DynamicNodeLabel(node.label),
+            Name::new(node_name.clone()),
         ));
 
         (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);
@@ -233,7 +346,14 @@ fn spawn_layout_inner(
         let node_id = entity.id();
 
         *z_index += 1;
-        spawn_layout_inner(world, node_id, resolution, &node.children, z_index);
+        spawn_layout_inner(
+            world,
+            node_id,
+            resolution,
+            &node.children,
+            z_index,
+            node_name,
+        );
         world.entity_mut(root_entity).add_child(node_id);
     }
 }
@@ -251,6 +371,7 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
     let reconstructed = (registered_node.reconstruct)(node);
 
     let mut ui_node = UiNode {
+        name: node.get::<Name>().unwrap().to_string(),
         attributes: UiNodeAttributes {
             position: transform.position,
             scale: transform.scale,
@@ -294,7 +415,17 @@ pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
         );
     }
 
-    Layout { resolution, nodes }
+    Layout {
+        resolution,
+        nodes,
+        animations: root
+            .get::<UiLayoutAnimationController>()
+            .unwrap()
+            .animations
+            .iter()
+            .map(|(name, state)| (name.clone(), state.animation.clone()))
+            .collect(),
+    }
 }
 
 fn get_nodes_as_nodes_repr(
@@ -304,6 +435,7 @@ fn get_nodes_as_nodes_repr(
     let mut repr_nodes = Vec::with_capacity(nodes.len());
     for node in nodes.iter() {
         repr_nodes.push(UiNodeRepr {
+            name: node.name.clone(),
             attributes: node.attributes.clone(),
             node_kind: node.registered_ui_node.name.to_string(),
             node_data: (node.registered_ui_node.serialize)(node.data.as_ref(), world)?,
@@ -319,9 +451,46 @@ pub fn serialize_layout_as_json(
     world: &World,
 ) -> Result<serde_json::Value, serde_json::Error> {
     let nodes = get_nodes_as_nodes_repr(&layout.nodes, world)?;
+    let target_reg = world.resource::<AnimationTargetRegistry>().clone();
+    let target_reg = target_reg.read().unwrap();
+
+    let mut animations = HashMap::new();
+
+    for (anim_name, anim) in layout.animations.iter() {
+        let mut lanes_by_node_name = HashMap::new();
+        for (node_name, lane) in anim.animation_by_node.iter() {
+            let mut lanes_by_target_name = HashMap::new();
+            for (target_label, lane) in lane.animation_by_id.iter() {
+                let target = target_reg.by_label.get(target_label).ok_or_else(|| {
+                    serde_json::Error::custom("Failed to get registered AnimationTarget by ID")
+                })?;
+                lanes_by_target_name.insert(
+                    target.name.to_string(),
+                    UiAnimationLane {
+                        data: (target.serialize)(lane.animation_data.as_ref(), world)?,
+                        starting_value: (target.serialize_content)(lane.starting_value.as_ref())?,
+                        edges: lane
+                            .keyframes
+                            .iter()
+                            .map(|kf| {
+                                Ok(UiNodeAnimationLaneEdge {
+                                    timestamp_ms: kf.timestamp_ms,
+                                    interpolation: kf.edge_interpolation.clone(),
+                                    value: (target.serialize_content)(kf.value.as_ref())?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, serde_json::Error>>()?,
+                    },
+                );
+            }
+            lanes_by_node_name.insert(node_name.clone(), UiNodeAnimationLane(lanes_by_target_name));
+        }
+        animations.insert(anim_name.to_string(), UiAnimationRepr(lanes_by_node_name));
+    }
 
     serde_json::to_value(LayoutRepr {
         resolution: layout.resolution,
         nodes,
+        animations,
     })
 }

@@ -4,7 +4,11 @@ use bevy_inspector_egui::{
     DefaultInspectorConfigPlugin,
 };
 use bevy_layout_ui::{
-    builtins::DefaultNodePluginGroup, loader::Layout, math::NodeSize, render::UiRenderPlugin,
+    animations::{PlaybackRequest, UiLayoutAnimationController},
+    builtins::DefaultNodePluginGroup,
+    loader::Layout,
+    math::NodeSize,
+    render::UiRenderPlugin,
     UiLayoutPlugin,
 };
 
@@ -51,6 +55,17 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 
     for root in roots.iter().copied() {
         egui::Window::new(format!("{root:?}")).show(context.get_mut(), |ui| {
+            if ui.button("Animate").clicked() {
+                let mut controller = world.get_mut::<UiLayoutAnimationController>(root).unwrap();
+
+                controller
+                    .animations
+                    .get_mut("test_animation")
+                    .unwrap()
+                    .requests
+                    .push(PlaybackRequest::Play);
+            }
+
             if ui.button("Marshall").clicked() {
                 let tree = bevy_layout_ui::loader::marshall_node_tree(world, root);
 

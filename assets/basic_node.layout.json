@@ -1,6 +1,7 @@
 {
   "nodes": [
     {
+      "name": "Text Node",
       "children": [],
       "node_data": {
         "font_face": "Comic Code",
@@ -16,8 +17,10 @@
       "size": [300.0, 300.0]
     },
     {
+      "name": "Image Node 1",
       "children": [
         {
+          "name": "Image Node 2",
           "children": [],
           "node_data": {
             "path": "images/test.png"
@@ -43,5 +46,27 @@
       "size": [50.0, 50.0]
     }
   ],
-  "resolution": [1920, 1080]
+  "resolution": [1920, 1080],
+  "animations": {
+    "test_animation": {
+      "root.Image Node 1": {
+        "Builtins.Size": {
+          "data": null,
+          "starting_value": [100.0, 100.0],
+          "edges": [
+            {
+              "timestamp_ms": 200,
+              "interpolation": "Linear",
+              "value": [200.0, 200.0]
+            },
+            {
+              "timestamp_ms": 500,
+              "interpolation": "Linear",
+              "value": [1000.0, 1000.0]
+            }
+          ]
+        }
+      }
+    }
+  }
 }
