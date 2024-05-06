@@ -11,7 +11,7 @@ use bevy::{
         entity::Entity,
         query::With,
         system::Resource,
-        world::{EntityWorldMut, World},
+        world::{EntityRef, EntityWorldMut, FromWorld, World},
     },
     hierarchy::Children,
     math::Vec2,
@@ -29,6 +29,11 @@ pub trait AnimationTarget: Send + Sized + Sync + 'static {
     const NAME: &'static str;
     type Content: Serialize + DeserializeOwned + Send + Sync + 'static;
     type Serde: Serialize + DeserializeOwned + 'static;
+
+    type BackupData: Send + Sync + 'static;
+
+    fn backup(&self, entity: EntityRef) -> Self::BackupData;
+    fn restore(&self, backup: Self::BackupData, entity: &mut EntityWorldMut);
 
     fn label() -> Interned<dyn AnimationTargetLabel>;
     fn node_label() -> Option<Interned<dyn NodeLabel>>;
@@ -52,10 +57,19 @@ pub trait AnimationTarget: Send + Sized + Sync + 'static {
     );
 }
 
+#[cfg(feature = "editor-ui")]
+pub trait EditorAnimationTarget: FromWorld + AnimationTarget {
+    fn default_content() -> Self::Content;
+    fn edit(&mut self, ui: &mut egui::Ui);
+    fn edit_content(content: &mut Self::Content, ui: &mut egui::Ui);
+}
+
 pub struct DynamicAnimationTarget {
     pub name: &'static str,
     pub label: Interned<dyn AnimationTargetLabel>,
     pub node_label: Option<Interned<dyn NodeLabel>>,
+    pub backup: fn(&dyn Any, EntityRef) -> Box<dyn Any + Send + Sync + 'static>,
+    pub restore: fn(&dyn Any, Box<dyn Any>, &mut EntityWorldMut),
     pub initialize: fn(&dyn Any, &mut EntityWorldMut, &dyn Any),
     pub interpolate: fn(&dyn Any, &mut EntityWorldMut, &dyn Any, &dyn Any, f32),
     pub serialize: fn(&dyn Any, &World) -> Result<serde_value::Value, JsonError>,
@@ -74,6 +88,15 @@ impl DynamicAnimationTarget {
             name: T::NAME,
             label: T::label(),
             node_label: T::node_label(),
+            backup: |this, entity| {
+                let this = this.downcast_ref::<T>().unwrap();
+                Box::new(this.backup(entity))
+            },
+            restore: |this, backup, entity| {
+                let this = this.downcast_ref::<T>().unwrap();
+                let backup = backup.downcast::<T::BackupData>().unwrap();
+                this.restore(*backup, entity)
+            },
             initialize: |this, entity, value| {
                 let this = this.downcast_ref::<T>().unwrap();
                 let value = value.downcast_ref::<T::Content>().unwrap();
@@ -120,6 +143,32 @@ impl DynamicAnimationTarget {
     }
 }
 
+#[cfg(feature = "editor-ui")]
+pub struct DynamicEditorAnimationTarget {
+    pub from_world: fn(&mut World) -> Box<dyn Any + Send + Sync + 'static>,
+    pub default_content: fn() -> Box<dyn Any + Send + Sync + 'static>,
+    pub edit: fn(&mut dyn Any, &mut egui::Ui),
+    pub edit_content: fn(&mut dyn Any, &mut egui::Ui),
+}
+
+#[cfg(feature = "editor-ui")]
+impl DynamicEditorAnimationTarget {
+    pub fn new<T: EditorAnimationTarget>() -> Self {
+        Self {
+            from_world: |world| Box::new(T::from_world(world)),
+            default_content: || Box::new(T::default_content()),
+            edit: |this, ui| {
+                let this = this.downcast_mut::<T>().unwrap();
+                this.edit(ui)
+            },
+            edit_content: |content, ui| {
+                let content = content.downcast_mut::<T::Content>().unwrap();
+                T::edit_content(content, ui)
+            },
+        }
+    }
+}
+
 bevy::utils::define_label!(AnimationTargetLabel, NODE_LABEL_INTERNER);
 
 #[derive(Default)]
@@ -141,6 +190,24 @@ impl RegisteredAnimationTargets {
             .is_none());
     }
 }
+
+#[cfg(feature = "editor-ui")]
+#[derive(Default)]
+pub struct RegisteredEditorAnimationTargets {
+    pub by_label: HashMap<Interned<dyn AnimationTargetLabel>, DynamicEditorAnimationTarget>,
+}
+
+#[cfg(feature = "editor-ui")]
+impl RegisteredEditorAnimationTargets {
+    pub fn register<T: EditorAnimationTarget>(&mut self) {
+        self.by_label
+            .insert(T::label(), DynamicEditorAnimationTarget::new::<T>());
+    }
+}
+
+#[cfg(feature = "editor-ui")]
+#[derive(Resource, Default, Deref, DerefMut, Clone)]
+pub struct EditorAnimationTargetRegistry(pub Arc<RwLock<RegisteredEditorAnimationTargets>>);
 
 #[derive(Resource, Default, Deref, DerefMut, Clone)]
 pub struct AnimationTargetRegistry(pub Arc<RwLock<RegisteredAnimationTargets>>);
@@ -193,43 +260,7 @@ pub struct Animation {
 
 impl Animation {
     pub fn animate(&self, world: &mut World, entity: Entity, timestamp: u32) -> bool {
-        fn map_children(children: &Children) -> impl Iterator<Item = Entity> + '_ {
-            children.iter().copied()
-        }
-
-        let mut entities_by_name = HashMap::new();
-        {
-            entities_by_name.insert("root".to_string(), entity);
-            let mut current_entity = world.entity(entity);
-            let mut children_stack = Vec::new();
-            let mut children = current_entity
-                .get::<Children>()
-                .into_iter()
-                .flat_map(map_children);
-            loop {
-                while let Some(next_child) = children.next() {
-                    children_stack.push((children, current_entity.id()));
-                    current_entity = world.entity(next_child);
-                    children = current_entity
-                        .get::<Children>()
-                        .into_iter()
-                        .flat_map(map_children);
-                }
-
-                let name = current_entity
-                    .get::<Name>()
-                    .expect("All UI nodes must have names")
-                    .to_string();
-
-                entities_by_name.insert(name, current_entity.id());
-                if let Some((next_children, next_entity)) = children_stack.pop() {
-                    children = next_children;
-                    current_entity = world.entity(next_entity);
-                } else {
-                    break;
-                }
-            }
-        }
+        let entities_by_name = collect_nodes_by_name(entity, world);
 
         let mut is_finished = true;
         let registry = world.resource::<AnimationTargetRegistry>().clone();
@@ -243,16 +274,6 @@ impl Animation {
             let mut entity = world.entity_mut(*entity);
 
             for (id, lane) in lane.animation_by_id.iter() {
-                let Some(index) = lane
-                    .keyframes
-                    .iter()
-                    .position(|kf| kf.timestamp_ms >= timestamp)
-                else {
-                    continue;
-                };
-
-                is_finished = false;
-
                 let animation_target = registry.by_label.get(id).unwrap();
 
                 if let Some(node_label) = animation_target.node_label.as_ref() {
@@ -264,6 +285,21 @@ impl Animation {
                         );
                     }
                 }
+                let Some(index) = lane
+                    .keyframes
+                    .iter()
+                    .position(|kf| kf.timestamp_ms >= timestamp)
+                else {
+                    let data = if let Some(last) = lane.keyframes.last() {
+                        last.value.as_ref()
+                    } else {
+                        lane.starting_value.as_ref()
+                    };
+                    (animation_target.initialize)(lane.animation_data.as_ref(), &mut entity, data);
+                    continue;
+                };
+
+                is_finished = false;
 
                 if timestamp == 0 {
                     (animation_target.initialize)(
@@ -271,34 +307,34 @@ impl Animation {
                         &mut entity,
                         lane.starting_value.as_ref(),
                     );
-                }
+                } else {
+                    let keyframe = &lane.keyframes[index];
 
-                let keyframe = &lane.keyframes[index];
-
-                let (start, end, interp) = match index {
-                    0 => (
-                        lane.starting_value.as_ref(),
-                        keyframe.value.as_ref(),
-                        timestamp as f32 / keyframe.timestamp_ms as f32,
-                    ),
-                    index => {
-                        let prev_keyframe = &lane.keyframes[index - 1];
-                        (
-                            prev_keyframe.value.as_ref(),
+                    let (start, end, interp) = match index {
+                        0 => (
+                            lane.starting_value.as_ref(),
                             keyframe.value.as_ref(),
-                            (timestamp - prev_keyframe.timestamp_ms) as f32
-                                / (keyframe.timestamp_ms - prev_keyframe.timestamp_ms) as f32,
-                        )
-                    }
-                };
+                            timestamp as f32 / keyframe.timestamp_ms as f32,
+                        ),
+                        index => {
+                            let prev_keyframe = &lane.keyframes[index - 1];
+                            (
+                                prev_keyframe.value.as_ref(),
+                                keyframe.value.as_ref(),
+                                (timestamp - prev_keyframe.timestamp_ms) as f32
+                                    / (keyframe.timestamp_ms - prev_keyframe.timestamp_ms) as f32,
+                            )
+                        }
+                    };
 
-                (animation_target.interpolate)(
-                    lane.animation_data.as_ref(),
-                    &mut entity,
-                    start,
-                    end,
-                    keyframe.edge_interpolation.interpolate(interp),
-                );
+                    (animation_target.interpolate)(
+                        lane.animation_data.as_ref(),
+                        &mut entity,
+                        start,
+                        end,
+                        keyframe.edge_interpolation.interpolate(interp),
+                    );
+                }
             }
         }
 
@@ -306,9 +342,53 @@ impl Animation {
     }
 }
 
+pub fn collect_nodes_by_name(
+    entity: Entity,
+    world: &mut World,
+) -> bevy::utils::hashbrown::HashMap<String, Entity> {
+    fn map_children(children: &Children) -> impl Iterator<Item = Entity> + '_ {
+        children.iter().copied()
+    }
+    let mut entities_by_name = HashMap::new();
+    {
+        entities_by_name.insert("root".to_string(), entity);
+        let mut current_entity = world.entity(entity);
+        let mut children_stack = Vec::new();
+        let mut children = current_entity
+            .get::<Children>()
+            .into_iter()
+            .flat_map(map_children);
+        loop {
+            while let Some(next_child) = children.next() {
+                children_stack.push((children, current_entity.id()));
+                current_entity = world.entity(next_child);
+                children = current_entity
+                    .get::<Children>()
+                    .into_iter()
+                    .flat_map(map_children);
+            }
+
+            let name = current_entity
+                .get::<Name>()
+                .expect("All UI nodes must have names")
+                .to_string();
+
+            entities_by_name.insert(name, current_entity.id());
+            if let Some((next_children, next_entity)) = children_stack.pop() {
+                children = next_children;
+                current_entity = world.entity(next_entity);
+            } else {
+                break;
+            }
+        }
+    }
+    entities_by_name
+}
+
 pub enum PlaybackData {
     NotPlaying,
     Playing {
+        restore_on_finish: bool,
         paused: bool,
         speed: f32,
         timestamp_ms: f32,
@@ -316,21 +396,30 @@ pub enum PlaybackData {
 }
 
 pub enum PlaybackRequest {
-    Play,
+    Play { restore_on_finish: bool },
     Stop,
     Pause,
     Resume,
 }
 
 pub struct AnimationPlaybackState {
-    pub animation: Arc<Animation>,
+    pub animation: Arc<RwLock<Animation>>,
     pub data: PlaybackData,
     pub requests: Vec<PlaybackRequest>,
+}
+
+pub struct BackupAnimationTargetState {
+    state: HashMap<Interned<dyn AnimationTargetLabel>, Box<dyn Any + Send + Sync + 'static>>,
+}
+
+pub struct BackupAnimationNodeState {
+    state: HashMap<String, BackupAnimationTargetState>,
 }
 
 #[derive(Component)]
 pub struct UiLayoutAnimationController {
     pub animations: HashMap<String, AnimationPlaybackState>,
+    pub backup_state: HashMap<String, BackupAnimationNodeState>,
 }
 
 pub fn update_animations(world: &mut World) {
@@ -346,19 +435,54 @@ pub fn update_animations(world: &mut World) {
                 .unwrap(),
             UiLayoutAnimationController {
                 animations: HashMap::new(),
+                backup_state: HashMap::new(),
             },
         );
 
-        for animation in animations.animations.values_mut() {
+        let children = collect_nodes_by_name(entity, world);
+
+        for (anim_name, animation) in animations.animations.iter_mut() {
             for request in animation.requests.iter() {
                 match request {
-                    PlaybackRequest::Play => {
+                    PlaybackRequest::Play { restore_on_finish } => {
                         if matches!(&animation.data, PlaybackData::NotPlaying) {
                             animation.data = PlaybackData::Playing {
+                                restore_on_finish: *restore_on_finish,
                                 paused: false,
                                 speed: 1.0,
                                 timestamp_ms: std::f32::NEG_INFINITY,
                             };
+
+                            if *restore_on_finish {
+                                let mut state = BackupAnimationNodeState {
+                                    state: HashMap::new(),
+                                };
+
+                                let anim = animation.animation.read().unwrap();
+                                let registry =
+                                    world.resource::<AnimationTargetRegistry>().read().unwrap();
+
+                                for (node_name, lane) in anim.animation_by_node.iter() {
+                                    let mut node_state = BackupAnimationTargetState {
+                                        state: HashMap::new(),
+                                    };
+
+                                    let node = world.entity(*children.get(node_name).unwrap());
+
+                                    for (id, lane) in lane.animation_by_id.iter() {
+                                        let target = registry.by_label.get(id).unwrap();
+                                        let data = (target.backup)(
+                                            lane.animation_data.as_ref(),
+                                            node.clone(),
+                                        );
+                                        node_state.state.insert(id.clone(), data);
+                                    }
+
+                                    state.state.insert(node_name.clone(), node_state);
+                                }
+
+                                animations.backup_state.insert(anim_name.clone(), state);
+                            }
                         }
                     }
                     PlaybackRequest::Stop => {
@@ -381,6 +505,7 @@ pub fn update_animations(world: &mut World) {
             animation.requests.clear();
 
             if let PlaybackData::Playing {
+                restore_on_finish,
                 paused,
                 speed,
                 timestamp_ms,
@@ -393,12 +518,30 @@ pub fn update_animations(world: &mut World) {
                         *timestamp_ms += delta_ms * *speed;
                     }
 
-                    let is_finished =
-                        animation
-                            .animation
-                            .animate(world, entity, timestamp_ms.trunc() as u32);
+                    let anim = animation.animation.read().unwrap();
+                    let is_finished = anim.animate(world, entity, timestamp_ms.trunc() as u32);
 
                     if is_finished {
+                        let registry = world.resource::<AnimationTargetRegistry>().clone();
+                        let registry = registry.read().unwrap();
+
+                        if *restore_on_finish {
+                            let state = animations.backup_state.remove(anim_name).unwrap();
+
+                            for (node_name, lane) in state.state {
+                                let mut node = world.entity_mut(*children.get(&node_name).unwrap());
+                                let anim_node = anim.animation_by_node.get(&node_name).unwrap();
+                                for (id, lane) in lane.state {
+                                    let anim_lane = anim_node.animation_by_id.get(&id).unwrap();
+                                    let target = registry.by_label.get(&id).unwrap();
+                                    (target.restore)(
+                                        anim_lane.animation_data.as_ref(),
+                                        lane,
+                                        &mut node,
+                                    );
+                                }
+                            }
+                        }
                         animation.data = PlaybackData::NotPlaying;
                     }
                 }

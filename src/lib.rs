@@ -20,6 +20,9 @@ use serde::{
 use serde_value::ValueDeserializer;
 
 #[cfg(feature = "editor-ui")]
+use crate::animations::EditorAnimationTargetRegistry;
+
+#[cfg(feature = "editor-ui")]
 pub mod editor;
 
 #[macro_export]
@@ -261,6 +264,7 @@ impl Plugin for UiLayoutPlugin {
         #[cfg(feature = "editor-ui")]
         {
             app.init_resource::<EditorUiNodeRegistry>();
+            app.init_resource::<EditorAnimationTargetRegistry>();
         }
 
         app.register_asset_loader(LayoutAssetLoader {
@@ -285,6 +289,10 @@ pub trait UiNodeApp {
     fn register_animation_target<T: AnimationTarget>(&mut self) -> &mut Self;
     #[cfg(feature = "editor-ui")]
     fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self;
+    #[cfg(feature = "editor-ui")]
+    fn register_editor_animation_target<T: animations::EditorAnimationTarget>(
+        &mut self,
+    ) -> &mut Self;
 }
 
 impl UiNodeApp for App {
@@ -311,7 +319,20 @@ impl UiNodeApp for App {
     #[cfg(feature = "editor-ui")]
     fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self {
         self.world
-            .resource_mut::<EditorUiNodeRegistry>()
+            .resource::<EditorUiNodeRegistry>()
+            .write()
+            .unwrap()
+            .register::<T>();
+
+        self
+    }
+
+    #[cfg(feature = "editor-ui")]
+    fn register_editor_animation_target<T: animations::EditorAnimationTarget>(
+        &mut self,
+    ) -> &mut Self {
+        self.world
+            .resource::<EditorAnimationTargetRegistry>()
             .write()
             .unwrap()
             .register::<T>();

@@ -48,7 +48,7 @@ pub enum LayoutAssetLoaderError {
 fn parse_animations(
     repr: HashMap<String, UiAnimationRepr>,
     registry: &RegisteredAnimationTargets,
-) -> Result<HashMap<String, Arc<Animation>>, LayoutAssetLoaderError> {
+) -> Result<HashMap<String, Arc<RwLock<Animation>>>, LayoutAssetLoaderError> {
     let mut animations = HashMap::new();
     for (name, animation_repr) in repr {
         let mut animation = Animation {
@@ -94,7 +94,7 @@ fn parse_animations(
             );
         }
 
-        animations.insert(name, Arc::new(animation));
+        animations.insert(name, Arc::new(RwLock::new(animation)));
     }
 
     Ok(animations)
@@ -242,7 +242,7 @@ pub struct UiNodeAttributes {
 pub struct Layout {
     pub resolution: UVec2,
     pub nodes: Vec<UiNode>,
-    pub animations: HashMap<String, Arc<Animation>>,
+    pub animations: HashMap<String, Arc<RwLock<Animation>>>,
 }
 
 impl Asset for Layout {}
@@ -297,6 +297,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                         )
                     })
                     .collect(),
+                backup_state: HashMap::new(),
             },
         ))
         .id();
@@ -371,7 +372,14 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
     let reconstructed = (registered_node.reconstruct)(node);
 
     let mut ui_node = UiNode {
-        name: node.get::<Name>().unwrap().to_string(),
+        name: node
+            .get::<Name>()
+            .unwrap()
+            .as_str()
+            .split('.')
+            .last()
+            .unwrap()
+            .to_string(),
         attributes: UiNodeAttributes {
             position: transform.position,
             scale: transform.scale,
@@ -457,6 +465,7 @@ pub fn serialize_layout_as_json(
     let mut animations = HashMap::new();
 
     for (anim_name, anim) in layout.animations.iter() {
+        let anim = anim.read().unwrap();
         let mut lanes_by_node_name = HashMap::new();
         for (node_name, lane) in anim.animation_by_node.iter() {
             let mut lanes_by_target_name = HashMap::new();

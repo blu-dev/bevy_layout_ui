@@ -55,17 +55,6 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
 
     for root in roots.iter().copied() {
         egui::Window::new(format!("{root:?}")).show(context.get_mut(), |ui| {
-            if ui.button("Animate").clicked() {
-                let mut controller = world.get_mut::<UiLayoutAnimationController>(root).unwrap();
-
-                controller
-                    .animations
-                    .get_mut("test_animation")
-                    .unwrap()
-                    .requests
-                    .push(PlaybackRequest::Play);
-            }
-
             if ui.button("Marshall").clicked() {
                 let tree = bevy_layout_ui::loader::marshall_node_tree(world, root);
 
@@ -76,13 +65,33 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
                 )
                 .unwrap();
             }
-            let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) else {
-                return;
-            };
 
-            if !open_nodes.contains(&entity) {
-                open_nodes.push(entity);
+            if let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) {
+                if !open_nodes.contains(&entity) {
+                    open_nodes.push(entity);
+                }
             }
+
+            if let Some(animation) = bevy_layout_ui::editor::display_animation_list(root, world, ui)
+            {
+                world
+                    .get_mut::<UiLayoutAnimationController>(root)
+                    .unwrap()
+                    .animations
+                    .get_mut(&animation)
+                    .unwrap()
+                    .requests
+                    .push(PlaybackRequest::Play {
+                        restore_on_finish: true,
+                    });
+            }
+
+            bevy_layout_ui::editor::animation::show_animation_editor(
+                root,
+                world,
+                ui,
+                "test_animation",
+            );
         });
     }
 

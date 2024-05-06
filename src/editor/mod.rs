@@ -4,12 +4,14 @@ use egui::{
 };
 
 use crate::{
+    animations::UiLayoutAnimationController,
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{UiNodeSettings, VertexColors},
 };
 
 use self::selectable_label::DraggableLabel;
 
+pub mod animation;
 pub mod node_ui;
 pub mod selectable_label;
 
@@ -43,6 +45,26 @@ fn add_button(ui: &mut egui::Ui) -> Response {
         resp
     })
     .inner
+}
+
+pub fn display_animation_list(
+    root_entity: Entity,
+    world: &mut World,
+    ui: &mut egui::Ui,
+) -> Option<String> {
+    let entity = world.entity_mut(root_entity);
+    let animations = entity.get::<UiLayoutAnimationController>().unwrap();
+    let mut animation_names = animations.animations.keys().collect::<Vec<_>>();
+    animation_names.sort();
+
+    let mut result = None;
+    for name in animation_names {
+        if ui.selectable_label(false, name).clicked() {
+            result = result.or_else(|| Some(name.clone()));
+        }
+    }
+
+    result
 }
 
 /// Displays a tree of nodes, returning one if it was selected
