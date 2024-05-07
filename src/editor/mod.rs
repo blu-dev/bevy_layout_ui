@@ -1,13 +1,23 @@
-use bevy::{ecs::system::CommandQueue, prelude::*, sprite::Anchor};
+use std::sync::{Arc, RwLock};
+
+use bevy::{ecs::system::CommandQueue, prelude::*, sprite::Anchor, utils::HashMap};
 use egui::{
     Align2, CollapsingHeader, Color32, Context, FontId, LayerId, Order, Response, Sense, Stroke,
 };
 
 use crate::{
-    animations::UiLayoutAnimationController,
-    builtins::sublayout::SpawnedSublayout,
+    animations::{
+        Animation, AnimationPlaybackState, PlaybackData, PlaybackRequest,
+        UiLayoutAnimationController,
+    },
+    builtins::{
+        null::{NullNode, NullNodeLabel},
+        sublayout::SpawnedSublayout,
+    },
+    loader::DynamicNodeLabel,
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
-    render::{UiNodeSettings, VertexColors},
+    render::{SkipNodeRender, UiNodeSettings, VertexColors},
+    NodeLabel,
 };
 
 use self::selectable_label::DraggableLabel;
@@ -20,7 +30,7 @@ fn get_name(entity: Entity, world: &World) -> String {
     let entity = world.entity(entity);
 
     match entity.get::<Name>() {
-        Some(name) => name.to_string(),
+        Some(name) => name.as_str().split('.').last().unwrap().to_string(),
         None => format!("Entity {:?}", entity.id()),
     }
 }
@@ -52,16 +62,42 @@ pub fn display_animation_list(
     root_entity: Entity,
     world: &mut World,
     ui: &mut egui::Ui,
-) -> Option<String> {
-    let entity = world.entity_mut(root_entity);
-    let animations = entity.get::<UiLayoutAnimationController>().unwrap();
-    let mut animation_names = animations.animations.keys().collect::<Vec<_>>();
-    animation_names.sort();
+) -> Option<usize> {
+    let mut entity = world.entity_mut(root_entity);
+    let mut animations = entity.get_mut::<UiLayoutAnimationController>().unwrap();
+    let animation_names = animations.animations.keys().cloned().collect::<Vec<_>>();
 
     let mut result = None;
-    for name in animation_names {
-        if ui.selectable_label(false, name).clicked() {
-            result = result.or_else(|| Some(name.clone()));
+    for (idx, name) in animation_names.into_iter().enumerate() {
+        let resp = ui.selectable_label(false, &name);
+
+        resp.context_menu(|ui| {
+            if ui.button("Play").clicked() {
+                animations.animations.get_mut(&name).unwrap().requests.push(
+                    PlaybackRequest::Play {
+                        restore_on_finish: true,
+                    },
+                );
+            }
+        });
+
+        if resp.clicked() {
+            result = result.or_else(|| Some(idx));
+        }
+    }
+
+    if add_button(ui).clicked() {
+        if !animations.animations.contains_key("New Animation") {
+            animations.animations.insert(
+                "New Animation".to_string(),
+                AnimationPlaybackState {
+                    animation: Arc::new(RwLock::new(Animation {
+                        animation_by_node: HashMap::default(),
+                    })),
+                    data: PlaybackData::NotPlaying,
+                    requests: vec![],
+                },
+            );
         }
     }
 
@@ -105,7 +141,15 @@ pub fn display_node_tree(
     }
     let mut tracker = DragTracker { location: None };
 
-    let resp = display_node_tree_impl(root_entity, world, ui, &mut commands, root_id, &mut tracker);
+    let resp = display_node_tree_impl(
+        root_entity,
+        world,
+        ui,
+        &mut commands,
+        root_id,
+        &mut tracker,
+        false,
+    );
 
     command_queue.apply(world);
 
@@ -197,98 +241,109 @@ fn display_node_tree_impl(
     commands: &mut Commands,
     root_id: egui::Id,
     tracker: &mut DragTracker,
+    show_parent: bool,
 ) -> Option<Entity> {
     let name = get_name(root_entity, world);
 
     let id = ui.id().with(&name);
 
-    if get_entity_openness(ui.ctx(), id) {
-        let resp = CollapsingHeader::new(&name)
-            .open(needs_reopen(ui.ctx(), ui.id().with(&name)))
-            .default_open(true)
-            .show(ui, |ui| {
-                let dragging = get_dragging_entity(ui.ctx(), root_id);
-                let mut total_number_children = 0;
-                let mut resp = if let Some(children) = world.get::<Children>(root_entity) {
-                    children.iter().copied().fold(None, |selected, item| {
-                        if world.get::<SpawnedSublayout>(item).is_some() {
-                            return selected;
-                        }
-                        if dragging.is_some() && tracker.location.is_none() {
-                            if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
-                                if hover_pos.y < ui.cursor().min.y {
-                                    tracker.location = Some((root_entity, total_number_children));
-                                    ui.painter().line_segment(
-                                        [
-                                            ui.cursor().left_top(),
-                                            ui.cursor().left_top() + egui::Vec2::new(50.0, 0.0),
-                                        ],
-                                        Stroke::new(2.0, Color32::WHITE),
-                                    );
-                                }
+    if !show_parent || get_entity_openness(ui.ctx(), id) {
+        let mut inner = |ui: &mut egui::Ui| {
+            let dragging = get_dragging_entity(ui.ctx(), root_id);
+            let mut total_number_children = 0;
+            let mut resp = if let Some(children) = world.get::<Children>(root_entity) {
+                children.iter().copied().fold(None, |selected, item| {
+                    if world.get::<SpawnedSublayout>(item).is_some() {
+                        return selected;
+                    }
+                    if dragging.is_some() && tracker.location.is_none() {
+                        if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
+                            if hover_pos.y < ui.cursor().min.y {
+                                tracker.location = Some((root_entity, total_number_children));
+                                ui.painter().line_segment(
+                                    [
+                                        ui.cursor().left_top(),
+                                        ui.cursor().left_top() + egui::Vec2::new(50.0, 0.0),
+                                    ],
+                                    Stroke::new(2.0, Color32::WHITE),
+                                );
                             }
                         }
-                        total_number_children += 1;
-                        selected.or(display_node_tree_impl(
-                            item, world, ui, commands, root_id, tracker,
-                        ))
-                    })
-                } else {
-                    None
-                };
+                    }
+                    total_number_children += 1;
+                    selected.or(display_node_tree_impl(
+                        item, world, ui, commands, root_id, tracker, true,
+                    ))
+                })
+            } else {
+                None
+            };
 
-                if dragging.is_some() && tracker.location.is_none() {
-                    if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
-                        if hover_pos.y < ui.cursor().min.y {
-                            tracker.location = Some((root_entity, total_number_children));
-                            ui.painter().line_segment(
-                                [
-                                    ui.cursor().left_top(),
-                                    ui.cursor().left_top() + egui::Vec2::new(50.0, 0.0),
-                                ],
-                                Stroke::new(2.0, Color32::WHITE),
-                            );
-                        }
+            if dragging.is_some() && tracker.location.is_none() {
+                if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
+                    if hover_pos.y < ui.cursor().min.y {
+                        tracker.location = Some((root_entity, total_number_children));
+                        ui.painter().line_segment(
+                            [
+                                ui.cursor().left_top(),
+                                ui.cursor().left_top() + egui::Vec2::new(50.0, 0.0),
+                            ],
+                            Stroke::new(2.0, Color32::WHITE),
+                        );
                     }
                 }
+            }
 
-                if add_button(ui).clicked() {
-                    let parent_name = world.get::<Name>(root_entity).unwrap().to_string();
-                    commands.entity(root_entity).with_children(|children| {
-                        resp = Some(
-                            children
-                                .spawn((
-                                    Name::new(format!("{parent_name}.New Node")),
-                                    Transform::new(),
-                                    GlobalTransform::default(),
-                                    Anchor::TopLeft,
-                                    NodeSize(Vec2::splat(50.0)),
-                                    UiNodeSettings {
-                                        target_resolution: UVec2::new(1920, 1080),
-                                        vertex_colors: VertexColors::default(),
-                                        opacity: 1.0,
-                                    },
-                                    ZIndex(2),
-                                ))
-                                .id(),
-                        );
-                    });
-                }
+            if add_button(ui).clicked() {
+                let parent_name = world.get::<Name>(root_entity).unwrap().to_string();
+                commands.entity(root_entity).with_children(|children| {
+                    resp = Some(
+                        children
+                            .spawn((
+                                Name::new(format!("{parent_name}.New Node")),
+                                Transform::new(),
+                                GlobalTransform::default(),
+                                Anchor::TopLeft,
+                                NodeSize(Vec2::splat(50.0)),
+                                UiNodeSettings {
+                                    target_resolution: UVec2::new(1920, 1080),
+                                    vertex_colors: VertexColors::default(),
+                                    opacity: 1.0,
+                                },
+                                ZIndex(2),
+                                DynamicNodeLabel(NullNodeLabel.intern()),
+                                NullNode,
+                                SkipNodeRender,
+                            ))
+                            .id(),
+                    );
+                });
+            }
 
-                resp
-            });
+            resp
+        };
 
-        if resp.body_returned.is_none() {
-            set_entity_openness(ui.ctx(), ui.id().with(&name), false);
+        if show_parent {
+            let resp = CollapsingHeader::new(&name)
+                .id_source(root_entity)
+                .open(needs_reopen(ui.ctx(), ui.id().with(&name)))
+                .default_open(true)
+                .show(ui, inner);
+
+            if resp.body_returned.is_none() {
+                set_entity_openness(ui.ctx(), ui.id().with(&name), false);
+            }
+
+            resp.header_response
+                .double_clicked()
+                .then_some(root_entity)
+                .or(resp.body_returned.flatten())
+        } else {
+            inner(ui)
         }
-
-        resp.header_response
-            .double_clicked()
-            .then_some(root_entity)
-            .or(resp.body_returned.flatten())
     } else {
         let resp = ui.add(DraggableLabel::new(false, &name));
-        if resp.clicked() {
+        let ret = if resp.clicked() {
             set_entity_openness(ui.ctx(), ui.id().with(&name), true);
             Some(root_entity)
         } else if resp.drag_started() {
@@ -296,6 +351,15 @@ fn display_node_tree_impl(
             None
         } else {
             None
-        }
+        };
+
+        resp.context_menu(|ui| {
+            if ui.button("Remove").clicked() {
+                commands.entity(root_entity).despawn_recursive();
+                ui.close_menu();
+            }
+        });
+
+        ret
     }
 }

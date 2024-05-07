@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use bevy::{
     asset::{LoadContext, RecursiveDependencyLoadState},
     prelude::*,
-    utils::intern::Interned,
+    utils::{intern::Interned, HashSet},
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,8 @@ impl Plugin for SublayoutNodePlugin {
         {
             app.register_editor_ui_node::<SublayoutNode>();
         }
+
+        app.add_systems(PostUpdate, spawn_loaded_layouts);
     }
 }
 
@@ -79,11 +81,11 @@ impl UserUiNode for SublayoutNode {
     }
 
     fn spawn(&self, entity: &mut EntityWorldMut) {
+        entity.insert((self.layout.clone(), SkipNodeRender));
         let layout_root = entity.world_scope(|world| {
-            let layout = world
-                .resource_mut::<Assets<Layout>>()
-                .remove(&self.layout)
-                .unwrap();
+            let Some(layout) = world.resource_mut::<Assets<Layout>>().remove(&self.layout) else {
+                return None;
+            };
             let entity = crate::loader::spawn_layout(world, &layout);
 
             world
@@ -91,12 +93,14 @@ impl UserUiNode for SublayoutNode {
                 .insert(self.layout.id(), layout);
 
             world.entity_mut(entity).insert(SpawnedSublayout);
-            entity
+            Some(entity)
         });
 
-        entity
-            .insert((self.layout.clone(), SkipNodeRender))
-            .add_child(layout_root);
+        let Some(layout_root) = layout_root else {
+            return;
+        };
+
+        entity.add_child(layout_root);
     }
 
     fn visit_asset_dependencies(&self, visit_fn: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {
@@ -166,19 +170,56 @@ impl EditorUiNode for SublayoutNode {
     fn cleanup(entity: &mut EntityWorldMut) {
         entity.remove::<Handle<Layout>>();
 
-        let children = entity
-            .get::<Children>()
-            .unwrap()
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        entity.world_scope(|world| {
-            for child in children {
-                let entity = world.entity_mut(child);
-                if entity.contains::<SpawnedSublayout>() {
-                    entity.despawn_recursive();
+        if entity.contains::<Children>() {
+            let children = entity
+                .get::<Children>()
+                .unwrap()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            entity.world_scope(|world| {
+                for child in children {
+                    let entity = world.entity_mut(child);
+                    if entity.contains::<SpawnedSublayout>() {
+                        entity.despawn_recursive();
+                    }
                 }
-            }
-        });
+            });
+        }
+    }
+}
+
+pub fn spawn_loaded_layouts(
+    mut commands: Commands,
+    mut reader: EventReader<AssetEvent<Layout>>,
+    nodes: Query<(Entity, &Handle<Layout>)>,
+) {
+    let loaded = reader
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect::<HashSet<AssetId<Layout>>>();
+
+    for (entity, handle) in nodes.iter() {
+        if loaded.contains(&handle.id()) {
+            let handle = handle.clone();
+            commands.add(move |world: &mut World| {
+                let layout = world
+                    .resource_mut::<Assets<Layout>>()
+                    .remove(&handle)
+                    .unwrap();
+                let spawned = crate::loader::spawn_layout(world, &layout);
+
+                world
+                    .resource_mut::<Assets<Layout>>()
+                    .insert(handle.id(), layout);
+
+                world.entity_mut(spawned).insert(SpawnedSublayout);
+
+                world.entity_mut(entity).add_child(entity);
+            });
+        }
     }
 }

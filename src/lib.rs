@@ -277,6 +277,8 @@ impl Plugin for UiLayoutPlugin {
         .register_type::<math::NonAxisAlignedBoundingBox>()
         .register_type::<math::NodeSize>()
         .register_type::<render::UiNodeSettings>()
+        .register_type::<render::VertexColors>()
+        .register_type_data::<bevy::render::color::Color, ReflectDefault>()
         .register_type::<loader::UiNodeAttributes>();
     }
 }

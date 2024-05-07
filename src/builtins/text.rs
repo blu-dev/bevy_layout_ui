@@ -21,7 +21,7 @@ use bevy::{
     utils::intern::Interned,
 };
 use bytemuck::{Pod, Zeroable};
-use cosmic_text::{Attrs, Family, FontSystem, Metrics, Shaping, SwashCache};
+use cosmic_text::{Attrs, Family, FontSystem, Metrics, Shaping, Style, SwashCache};
 use serde::{Deserialize, Serialize};
 
 use crate::math::NodeSize;
@@ -61,9 +61,23 @@ pub struct TextNodeLabel;
 decl_node_label!(TextNodeLabel);
 
 #[derive(Deserialize, Serialize)]
+#[serde(remote = "cosmic_text::Style")]
+pub enum LocalStyle {
+    Normal,
+    Italic,
+    Oblique,
+}
+
+fn default_style() -> Style {
+    Style::Normal
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct TextNodeData {
     pub font_face: String,
     pub font_size: u32,
+    #[serde(with = "LocalStyle", default = "default_style")]
+    pub style: Style,
     pub text: String,
 }
 
@@ -71,6 +85,7 @@ pub struct TextNodeData {
 pub struct TextNode {
     font_face: String,
     font_size: u32,
+    style: Style,
     text: String,
 }
 
@@ -79,6 +94,7 @@ impl Default for TextNode {
         Self {
             font_face: "Times New Roman".into(),
             font_size: 32,
+            style: Style::Normal,
             text: "Enter Text Here".into(),
         }
     }
@@ -100,6 +116,7 @@ impl UserUiNode for TextNode {
         Ok(TextNodeData {
             font_face: self.font_face.clone(),
             font_size: self.font_size,
+            style: self.style,
             text: self.text.clone(),
         })
     }
@@ -111,6 +128,7 @@ impl UserUiNode for TextNode {
         Ok(Self {
             font_face: serde.font_face,
             font_size: serde.font_size,
+            style: serde.style,
             text: serde.text,
         })
     }
@@ -141,6 +159,31 @@ impl crate::EditorUiNode for TextNode {
         });
 
         ui.horizontal(|ui| {
+            const STYLES: [&'static str; 3] = ["Normal", "Italic", "Oblique"];
+
+            let mut index = match &text_node.style {
+                Style::Normal => 0,
+                Style::Italic => 1,
+                Style::Oblique => 2,
+            };
+
+            ui.label("Font Style");
+            egui::ComboBox::new("text-node-font-style", "").show_index(
+                ui,
+                &mut index,
+                STYLES.len(),
+                |idx| STYLES[idx],
+            );
+
+            text_node.style = match index {
+                0 => Style::Normal,
+                1 => Style::Italic,
+                2 => Style::Oblique,
+                _ => unreachable!(),
+            };
+        });
+
+        ui.horizontal(|ui| {
             ui.label("Text");
             ui.text_edit_multiline(&mut text_node.text);
         });
@@ -154,6 +197,7 @@ impl crate::EditorUiNode for TextNode {
 struct ExtractedTextNode {
     font_face: String,
     font_size: u32,
+    style: Style,
     text: String,
     node_size: Vec2,
 }
@@ -238,6 +282,7 @@ fn extract_text_nodes(
             ExtractedTextNode {
                 font_face: node.font_face.clone(),
                 font_size: node.font_size,
+                style: node.style,
                 text: node.text.clone(),
                 node_size: node_size.0,
             },
@@ -309,6 +354,7 @@ fn prepare_text_nodes(
                 &extracted_node.text,
                 Attrs {
                     family: Family::Name(&extracted_node.font_face),
+                    style: extracted_node.style,
                     ..Attrs::new()
                 },
                 Shaping::Basic,

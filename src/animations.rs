@@ -19,6 +19,7 @@ use bevy::{
     time::Time,
     utils::{intern::Interned, HashMap},
 };
+use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, ser::Error, Deserialize, Serialize};
 use serde_json::Error as JsonError;
 use serde_value::ValueDeserializer;
@@ -245,13 +246,14 @@ pub struct AnimationKeyframe {
 }
 
 pub struct AnimationIdLane {
+    pub target: Interned<dyn AnimationTargetLabel>,
     pub animation_data: Box<dyn Any + Send + Sync + 'static>,
     pub starting_value: Box<dyn Any + Send + Sync + 'static>,
     pub keyframes: Vec<AnimationKeyframe>,
 }
 
 pub struct AnimationNodeLane {
-    pub animation_by_id: HashMap<Interned<dyn AnimationTargetLabel>, AnimationIdLane>,
+    pub animation_by_id: Vec<AnimationIdLane>,
 }
 
 pub struct Animation {
@@ -273,8 +275,8 @@ impl Animation {
 
             let mut entity = world.entity_mut(*entity);
 
-            for (id, lane) in lane.animation_by_id.iter() {
-                let animation_target = registry.by_label.get(id).unwrap();
+            for lane in lane.animation_by_id.iter() {
+                let animation_target = registry.by_label.get(&lane.target).unwrap();
 
                 if let Some(node_label) = animation_target.node_label.as_ref() {
                     let entity_node_label = entity.get::<DynamicNodeLabel>().unwrap();
@@ -413,7 +415,10 @@ pub struct AnimationPlaybackState {
 }
 
 pub struct BackupAnimationTargetState {
-    state: HashMap<Interned<dyn AnimationTargetLabel>, Box<dyn Any + Send + Sync + 'static>>,
+    state: Vec<(
+        Interned<dyn AnimationTargetLabel>,
+        Box<dyn Any + Send + Sync + 'static>,
+    )>,
 }
 
 pub struct BackupAnimationNodeState {
@@ -422,7 +427,7 @@ pub struct BackupAnimationNodeState {
 
 #[derive(Component)]
 pub struct UiLayoutAnimationController {
-    pub animations: HashMap<String, AnimationPlaybackState>,
+    pub animations: IndexMap<String, AnimationPlaybackState>,
     pub backup_state: HashMap<String, BackupAnimationNodeState>,
 }
 
@@ -438,7 +443,7 @@ pub fn update_animations(world: &mut World) {
                 .get_mut::<UiLayoutAnimationController>(entity)
                 .unwrap(),
             UiLayoutAnimationController {
-                animations: HashMap::new(),
+                animations: IndexMap::new(),
                 backup_state: HashMap::new(),
             },
         );
@@ -467,19 +472,19 @@ pub fn update_animations(world: &mut World) {
                                     world.resource::<AnimationTargetRegistry>().read().unwrap();
 
                                 for (node_name, lane) in anim.animation_by_node.iter() {
-                                    let mut node_state = BackupAnimationTargetState {
-                                        state: HashMap::new(),
-                                    };
+                                    let mut node_state =
+                                        BackupAnimationTargetState { state: Vec::new() };
 
                                     let node = world.entity(*children.get(node_name).unwrap());
 
-                                    for (id, lane) in lane.animation_by_id.iter() {
-                                        let target = registry.by_label.get(id).unwrap();
+                                    for lane in lane.animation_by_id.iter() {
+                                        let target = registry.by_label.get(&lane.target).unwrap();
                                         let data = (target.backup)(
                                             lane.animation_data.as_ref(),
                                             node.clone(),
                                         );
-                                        node_state.state.insert(id.clone(), data);
+
+                                        node_state.state.push((lane.target.clone(), data));
                                     }
 
                                     state.state.insert(node_name.clone(), node_state);
@@ -535,12 +540,14 @@ pub fn update_animations(world: &mut World) {
                             for (node_name, lane) in state.state {
                                 let mut node = world.entity_mut(*children.get(&node_name).unwrap());
                                 let anim_node = anim.animation_by_node.get(&node_name).unwrap();
-                                for (id, lane) in lane.state {
-                                    let anim_lane = anim_node.animation_by_id.get(&id).unwrap();
+                                for ((id, backup_data), lane) in
+                                    lane.state.into_iter().zip(anim_node.animation_by_id.iter())
+                                {
+                                    assert_eq!(id, lane.target);
                                     let target = registry.by_label.get(&id).unwrap();
                                     (target.restore)(
-                                        anim_lane.animation_data.as_ref(),
-                                        lane,
+                                        lane.animation_data.as_ref(),
+                                        backup_data,
                                         &mut node,
                                     );
                                 }

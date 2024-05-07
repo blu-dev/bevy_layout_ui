@@ -13,6 +13,7 @@ use bevy::{
     sprite::Anchor,
     utils::{intern::Interned, HashMap},
 };
+use indexmap::IndexMap;
 use serde::{ser::Error, Deserialize, Serialize};
 use thiserror::Error;
 
@@ -22,6 +23,7 @@ use crate::{
         AnimationTargetRegistry, EdgeInterpolation, PlaybackData, RegisteredAnimationTargets,
         UiLayoutAnimationController,
     },
+    builtins::sublayout::SpawnedSublayout,
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{SkipNodeRender, UiNodeSettings, VertexColors},
     NodeLabel, RegisteredUiNode, RegisteredUserUiNodes, UiNodeRegistry,
@@ -46,7 +48,7 @@ pub enum LayoutAssetLoaderError {
 }
 
 fn parse_animations(
-    repr: HashMap<String, UiAnimationRepr>,
+    repr: IndexMap<String, UiAnimationRepr>,
     registry: &RegisteredAnimationTargets,
 ) -> Result<HashMap<String, Arc<RwLock<Animation>>>, LayoutAssetLoaderError> {
     let mut animations = HashMap::new();
@@ -56,10 +58,10 @@ fn parse_animations(
         };
 
         for (node_name, lane) in animation_repr.0 {
-            let mut animation_lanes = HashMap::new();
-            for (target_name, lane) in lane.0 {
-                let label = registry.by_name.get(target_name.as_str()).ok_or_else(|| {
-                    LayoutAssetLoaderError::MissingAnimationTarget(target_name.clone())
+            let mut animation_lanes = Vec::new();
+            for lane in lane.0 {
+                let label = registry.by_name.get(lane.target.as_str()).ok_or_else(|| {
+                    LayoutAssetLoaderError::MissingAnimationTarget(lane.target.clone())
                 })?;
                 let registered = registry.by_label.get(label).unwrap();
                 let animation_data = (registered.deserialize)(lane.data)?;
@@ -77,14 +79,12 @@ fn parse_animations(
                     })
                     .collect::<Result<Vec<AnimationKeyframe>, LayoutAssetLoaderError>>()?;
 
-                animation_lanes.insert(
-                    label.clone(),
-                    AnimationIdLane {
-                        animation_data,
-                        starting_value,
-                        keyframes,
-                    },
-                );
+                animation_lanes.push(AnimationIdLane {
+                    target: label.clone(),
+                    animation_data,
+                    starting_value,
+                    keyframes,
+                });
             }
             animation.animation_by_node.insert(
                 node_name,
@@ -207,13 +207,14 @@ struct UiNodeAnimationLaneEdge {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct UiAnimationLane {
+    target: String,
     data: serde_value::Value,
     starting_value: serde_value::Value,
     edges: Vec<UiNodeAnimationLaneEdge>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct UiNodeAnimationLane(HashMap<String, UiAnimationLane>);
+struct UiNodeAnimationLane(Vec<UiAnimationLane>);
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct UiAnimationRepr(HashMap<String, UiNodeAnimationLane>);
@@ -222,7 +223,7 @@ struct UiAnimationRepr(HashMap<String, UiNodeAnimationLane>);
 struct LayoutRepr {
     resolution: UVec2,
     nodes: Vec<UiNodeRepr>,
-    animations: HashMap<String, UiAnimationRepr>,
+    animations: IndexMap<String, UiAnimationRepr>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
@@ -236,6 +237,8 @@ pub struct UiNodeAttributes {
     pub size: Vec2,
     pub scale: Vec2,
     pub rotation: f32,
+    #[serde(default)]
+    pub vertex_colors: VertexColors,
 }
 
 #[derive(TypePath)]
@@ -337,7 +340,7 @@ fn spawn_layout_inner(
             NodeSize(node.attributes.size),
             UiNodeSettings {
                 target_resolution: resolution,
-                vertex_colors: VertexColors::default(),
+                vertex_colors: node.attributes.vertex_colors,
                 opacity: 1.0,
             },
             ZIndex(*z_index),
@@ -390,6 +393,7 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
             parent_anchor: transform.parent_anchor,
             position_anchor: *anchor,
             size: size.0,
+            vertex_colors: node.get::<UiNodeSettings>().unwrap().vertex_colors,
         },
         label: label.0,
         data: reconstructed,
@@ -398,11 +402,12 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
     };
 
     if let Some(children) = node.get::<Children>() {
-        ui_node.children.extend(
-            children
-                .iter()
-                .map(|child| marshall_ui_node(world, registry, *child)),
-        );
+        ui_node.children.extend(children.iter().filter_map(|child| {
+            world
+                .get::<SpawnedSublayout>(*child)
+                .is_none()
+                .then(|| marshall_ui_node(world, registry, *child))
+        }));
     }
 
     ui_node
@@ -419,11 +424,12 @@ pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
     let resolution = root.get::<UiNodeSettings>().unwrap().target_resolution;
     let mut nodes = vec![];
     if let Some(children) = root.get::<Children>() {
-        nodes.extend(
-            children
-                .iter()
-                .map(|child| marshall_ui_node(world, &registry, *child)),
-        );
+        nodes.extend(children.iter().filter_map(|child| {
+            world
+                .get::<SpawnedSublayout>(*child)
+                .is_none()
+                .then(|| marshall_ui_node(world, &registry, *child))
+        }));
     }
 
     Layout {
@@ -465,35 +471,33 @@ pub fn serialize_layout_as_json(
     let target_reg = world.resource::<AnimationTargetRegistry>().clone();
     let target_reg = target_reg.read().unwrap();
 
-    let mut animations = HashMap::new();
+    let mut animations = IndexMap::new();
 
     for (anim_name, anim) in layout.animations.iter() {
         let anim = anim.read().unwrap();
         let mut lanes_by_node_name = HashMap::new();
         for (node_name, lane) in anim.animation_by_node.iter() {
-            let mut lanes_by_target_name = HashMap::new();
-            for (target_label, lane) in lane.animation_by_id.iter() {
-                let target = target_reg.by_label.get(target_label).ok_or_else(|| {
+            let mut lanes_by_target_name = Vec::new();
+            for lane in lane.animation_by_id.iter() {
+                let target = target_reg.by_label.get(&lane.target).ok_or_else(|| {
                     serde_json::Error::custom("Failed to get registered AnimationTarget by ID")
                 })?;
-                lanes_by_target_name.insert(
-                    target.name.to_string(),
-                    UiAnimationLane {
-                        data: (target.serialize)(lane.animation_data.as_ref(), world)?,
-                        starting_value: (target.serialize_content)(lane.starting_value.as_ref())?,
-                        edges: lane
-                            .keyframes
-                            .iter()
-                            .map(|kf| {
-                                Ok(UiNodeAnimationLaneEdge {
-                                    timestamp_ms: kf.timestamp_ms,
-                                    interpolation: kf.edge_interpolation.clone(),
-                                    value: (target.serialize_content)(kf.value.as_ref())?,
-                                })
+                lanes_by_target_name.push(UiAnimationLane {
+                    target: target.name.to_string(),
+                    data: (target.serialize)(lane.animation_data.as_ref(), world)?,
+                    starting_value: (target.serialize_content)(lane.starting_value.as_ref())?,
+                    edges: lane
+                        .keyframes
+                        .iter()
+                        .map(|kf| {
+                            Ok(UiNodeAnimationLaneEdge {
+                                timestamp_ms: kf.timestamp_ms,
+                                interpolation: kf.edge_interpolation.clone(),
+                                value: (target.serialize_content)(kf.value.as_ref())?,
                             })
-                            .collect::<Result<Vec<_>, serde_json::Error>>()?,
-                    },
-                );
+                        })
+                        .collect::<Result<Vec<_>, serde_json::Error>>()?,
+                });
             }
             lanes_by_node_name.insert(node_name.clone(), UiNodeAnimationLane(lanes_by_target_name));
         }

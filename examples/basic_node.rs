@@ -82,20 +82,21 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
                     .get_mut::<UiLayoutAnimationController>(root)
                     .unwrap()
                     .animations
-                    .get_mut(&animation)
+                    .get_index_mut(animation)
                     .unwrap()
+                    .1
                     .requests
                     .push(PlaybackRequest::Play {
                         restore_on_finish: true,
                     });
             }
 
-            bevy_layout_ui::editor::animation::show_animation_editor(
-                root,
-                world,
-                ui,
-                "test_animation",
-            );
+            // bevy_layout_ui::editor::animation::show_animation_editor(
+            //     root,
+            //     world,
+            //     ui,
+            //     "test_animation",
+            // );
         });
     }
 

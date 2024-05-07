@@ -27,20 +27,118 @@ use bevy::render::render_resource::{
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::BevyDefault;
-use bevy::render::view::ViewTarget;
+use bevy::render::view::{RenderLayers, ViewTarget};
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::sprite::Anchor;
 use bevy::utils::nonmax::NonMaxU32;
 use bytemuck::{Pod, Zeroable};
+use serde::{Deserialize, Serialize};
 
 use crate::math::{GlobalTransform, NodeSize, ZIndex};
 
-#[derive(Debug, Copy, Clone, Reflect, Default)]
-pub struct VertexColors {
-    pub top_left: Color,
-    pub top_right: Color,
-    pub bottom_left: Color,
-    pub bottom_right: Color,
+#[derive(Debug, Copy, Clone, Reflect, Deserialize, Serialize)]
+#[reflect(Default)]
+pub enum VertexColors {
+    Single(Color),
+    Corners {
+        top_left: Color,
+        top_right: Color,
+        bottom_left: Color,
+        bottom_right: Color,
+    },
+}
+
+impl VertexColors {
+    pub fn top_left(&self) -> Color {
+        match self {
+            Self::Single(color) => *color,
+            Self::Corners { top_left, .. } => *top_left,
+        }
+    }
+    pub fn top_right(&self) -> Color {
+        match self {
+            Self::Single(color) => *color,
+            Self::Corners { top_right, .. } => *top_right,
+        }
+    }
+    pub fn bottom_left(&self) -> Color {
+        match self {
+            Self::Single(color) => *color,
+            Self::Corners { bottom_left, .. } => *bottom_left,
+        }
+    }
+    pub fn bottom_right(&self) -> Color {
+        match self {
+            Self::Single(color) => *color,
+            Self::Corners { bottom_right, .. } => *bottom_right,
+        }
+    }
+
+    pub fn set_top_left(&mut self, color: Color) {
+        match self {
+            Self::Single(old_color) => {
+                let old = *old_color;
+                *self = Self::Corners {
+                    top_left: color,
+                    top_right: old,
+                    bottom_left: old,
+                    bottom_right: old,
+                };
+            }
+            Self::Corners { top_left, .. } => *top_left = color,
+        }
+    }
+
+    pub fn set_top_right(&mut self, color: Color) {
+        match self {
+            Self::Single(old_color) => {
+                let old = *old_color;
+                *self = Self::Corners {
+                    top_left: old,
+                    top_right: color,
+                    bottom_left: old,
+                    bottom_right: old,
+                };
+            }
+            Self::Corners { top_right, .. } => *top_right = color,
+        }
+    }
+
+    pub fn set_bottom_left(&mut self, color: Color) {
+        match self {
+            Self::Single(old_color) => {
+                let old = *old_color;
+                *self = Self::Corners {
+                    top_left: old,
+                    top_right: old,
+                    bottom_left: color,
+                    bottom_right: old,
+                };
+            }
+            Self::Corners { bottom_left, .. } => *bottom_left = color,
+        }
+    }
+
+    pub fn set_bottom_right(&mut self, color: Color) {
+        match self {
+            Self::Single(old_color) => {
+                let old = *old_color;
+                *self = Self::Corners {
+                    top_left: old,
+                    top_right: old,
+                    bottom_left: old,
+                    bottom_right: color,
+                };
+            }
+            Self::Corners { bottom_right, .. } => *bottom_right = color,
+        }
+    }
+}
+
+impl Default for VertexColors {
+    fn default() -> Self {
+        Self::Single(Color::WHITE)
+    }
 }
 
 /// Marker component used to skip rendering nodes
@@ -367,6 +465,7 @@ pub struct ExtractedNode {
     affine: Affine2,
     z_index: isize,
     settings: UiNodeSettings,
+    layer: RenderLayers,
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -389,6 +488,7 @@ pub struct ExtractNodeQuery {
     anchor: &'static Anchor,
     settings: &'static UiNodeSettings,
     z_index: &'static ZIndex,
+    layer: Option<&'static RenderLayers>,
 }
 
 pub fn extract_nodes(
@@ -410,6 +510,7 @@ pub fn extract_nodes(
                 affine,
                 z_index: data.z_index.0,
                 settings: *data.settings,
+                layer: data.layer.copied().unwrap_or_default(),
             },
         );
     }
@@ -509,10 +610,10 @@ pub fn prepare_ui_nodes(
                 let offset = uniform_writer.write(
                     &CommonNodeUniform::from_layout_size(node.settings.target_resolution)
                         .with_vertex_colors(
-                            node.settings.vertex_colors.top_left,
-                            node.settings.vertex_colors.top_right,
-                            node.settings.vertex_colors.bottom_left,
-                            node.settings.vertex_colors.bottom_right,
+                            node.settings.vertex_colors.top_left(),
+                            node.settings.vertex_colors.top_right(),
+                            node.settings.vertex_colors.bottom_left(),
+                            node.settings.vertex_colors.bottom_right(),
                         )
                         .with_opacity(node.settings.opacity),
                 );
@@ -520,7 +621,7 @@ pub fn prepare_ui_nodes(
 
                 item.batch_range = (idx as u32)..(idx as u32 + 1);
 
-                commands.get_or_spawn(item.entity);
+                commands.get_or_spawn(item.entity).insert(node.layer);
             }
         }
     }
@@ -642,13 +743,17 @@ impl ViewNode for UiLayoutNode {
         &'static ExtractedCamera,
         &'static ViewTarget,
         &'static RenderPhase<UiNodeItem>,
+        Option<&'static RenderLayers>,
     );
 
     fn run<'w>(
         &self,
         _: &mut bevy::render::render_graph::RenderGraphContext,
         render_context: &mut bevy::render::renderer::RenderContext<'w>,
-        (entity, camera, target, phase): bevy::ecs::query::QueryItem<'w, Self::ViewQuery>,
+        (entity, camera, target, phase, camera_layer): bevy::ecs::query::QueryItem<
+            'w,
+            Self::ViewQuery,
+        >,
         world: &'w World,
     ) -> Result<(), bevy::render::render_graph::NodeRunError> {
         let draw_functions = world.resource::<DrawFunctions<UiNodeItem>>();
@@ -687,6 +792,14 @@ impl ViewNode for UiLayoutNode {
                     } else {
                         item.draw_function_id
                     };
+
+                if let Some(render_layers) = world.get::<RenderLayers>(item.entity) {
+                    if let Some(camera_layer) = camera_layer {
+                        if !render_layers.eq(camera_layer) {
+                            continue;
+                        }
+                    }
+                }
 
                 let draw_function = draw_functions.get_mut(id).unwrap();
                 draw_function.prepare(world);

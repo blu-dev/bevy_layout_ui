@@ -4,7 +4,7 @@ use bevy::{math::Vec2, utils::intern::Interned};
 use serde::{Deserialize, Serialize};
 
 use crate::math::Transform;
-use crate::render::UiNodeSettings;
+use crate::render::{UiNodeSettings, VertexColors};
 use crate::UiNodeApp;
 use crate::{
     animations::{AnimationTarget, AnimationTargetLabel},
@@ -38,6 +38,7 @@ impl Plugin for BuiltinAnimationsPlugin {
 #[derive(Deserialize, Serialize, Default, Copy, Clone, Debug)]
 pub enum VertexColorId {
     #[default]
+    All,
     TopLeft,
     TopRight,
     BottomLeft,
@@ -52,20 +53,31 @@ pub struct VertexColorLabel;
 
 decl_animation_label!(VertexColorLabel);
 
+pub enum VertexColorBackup {
+    All([Color; 4]),
+    One(Color),
+}
+
 impl AnimationTarget for VertexColorAnimation {
     type Content = Color;
     type Serde = VertexColorId;
 
-    type BackupData = Color;
+    type BackupData = VertexColorBackup;
 
     fn backup(&self, entity: EntityRef) -> Self::BackupData {
         use VertexColorId as V;
         let colors = &entity.get::<UiNodeSettings>().unwrap().vertex_colors;
         match self.0 {
-            V::TopLeft => colors.top_left,
-            V::TopRight => colors.top_right,
-            V::BottomLeft => colors.bottom_left,
-            V::BottomRight => colors.bottom_right,
+            V::All => VertexColorBackup::All([
+                colors.top_left(),
+                colors.top_right(),
+                colors.bottom_left(),
+                colors.bottom_right(),
+            ]),
+            V::TopLeft => VertexColorBackup::One(colors.top_left()),
+            V::TopRight => VertexColorBackup::One(colors.top_right()),
+            V::BottomLeft => VertexColorBackup::One(colors.bottom_left()),
+            V::BottomRight => VertexColorBackup::One(colors.bottom_right()),
         }
     }
 
@@ -76,11 +88,27 @@ impl AnimationTarget for VertexColorAnimation {
             .unwrap()
             .into_inner()
             .vertex_colors;
-        match self.0 {
-            V::TopLeft => colors.top_left = backup,
-            V::TopRight => colors.top_right = backup,
-            V::BottomLeft => colors.bottom_left = backup,
-            V::BottomRight => colors.bottom_right = backup,
+        match backup {
+            VertexColorBackup::All([top_left, top_right, bottom_left, bottom_right]) => {
+                if top_left == top_right && top_right == bottom_left && bottom_left == bottom_right
+                {
+                    *colors = VertexColors::Single(top_left)
+                } else {
+                    *colors = VertexColors::Corners {
+                        top_left,
+                        top_right,
+                        bottom_left,
+                        bottom_right,
+                    };
+                }
+            }
+            VertexColorBackup::One(backup) => match self.0 {
+                V::All => panic!("One color backed up for entire color transition"),
+                V::TopLeft => colors.set_top_left(backup),
+                V::TopRight => colors.set_top_right(backup),
+                V::BottomLeft => colors.set_bottom_left(backup),
+                V::BottomRight => colors.set_bottom_right(backup),
+            },
         }
     }
 
@@ -98,14 +126,18 @@ impl AnimationTarget for VertexColorAnimation {
         use VertexColorId as V;
         let mut settings = entity.get_mut::<UiNodeSettings>().unwrap();
         let colors = &mut settings.vertex_colors;
-        let color = match self.0 {
-            V::TopLeft => &mut colors.top_left,
-            V::TopRight => &mut colors.top_right,
-            V::BottomLeft => &mut colors.bottom_left,
-            V::BottomRight => &mut colors.bottom_right,
+        let setter = match self.0 {
+            V::All => {
+                *colors = VertexColors::Single(*starting_value);
+                return;
+            }
+            V::TopLeft => VertexColors::set_top_left,
+            V::TopRight => VertexColors::set_top_right,
+            V::BottomLeft => VertexColors::set_bottom_left,
+            V::BottomRight => VertexColors::set_bottom_right,
         };
 
-        *color = *starting_value;
+        setter(colors, *starting_value);
     }
 
     fn interpolate(
@@ -123,13 +155,6 @@ impl AnimationTarget for VertexColorAnimation {
         use VertexColorId as V;
         let mut settings = entity.get_mut::<UiNodeSettings>().unwrap();
         let colors = &mut settings.vertex_colors;
-        let color = match self.0 {
-            V::TopLeft => &mut colors.top_left,
-            V::TopRight => &mut colors.top_right,
-            V::BottomLeft => &mut colors.bottom_left,
-            V::BottomRight => &mut colors.bottom_right,
-        };
-
         let (linear_a, bright_a) = linear_and_bright(*start);
         let (linear_b, bright_b) = linear_and_bright(*end);
         let intensity = (bright_a * (1.0 - interp) + bright_b * interp).powf(0.43f32.recip());
@@ -138,8 +163,19 @@ impl AnimationTarget for VertexColorAnimation {
         if sum != 0.0 {
             c = c * intensity / sum;
         }
+        let c = Color::rgba_linear(c.x, c.y, c.z, c.w);
+        let setter = match self.0 {
+            V::All => {
+                *colors = VertexColors::Single(c);
+                return;
+            }
+            V::TopLeft => VertexColors::set_top_left,
+            V::TopRight => VertexColors::set_top_right,
+            V::BottomLeft => VertexColors::set_bottom_left,
+            V::BottomRight => VertexColors::set_bottom_right,
+        };
 
-        *color = Color::rgba_linear(c.x, c.y, c.z, c.w);
+        setter(colors, c);
     }
 
     fn serialize(&self, _: &World) -> Result<Self::Serde, serde_json::Error> {
@@ -515,7 +551,13 @@ const _: () = {
 
     impl EditorAnimationTarget for VertexColorAnimation {
         fn edit(&mut self, ui: &mut egui::Ui) {
-            let names = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"];
+            let names = [
+                "All",
+                "Top Left",
+                "Top Right",
+                "Bottom Left",
+                "Bottom Right",
+            ];
 
             let mut selected = self.0 as usize;
 
@@ -525,6 +567,15 @@ const _: () = {
                 names.len(),
                 |idx| names[idx],
             );
+
+            match selected {
+                0 => self.0 = VertexColorId::All,
+                1 => self.0 = VertexColorId::TopLeft,
+                2 => self.0 = VertexColorId::TopRight,
+                3 => self.0 = VertexColorId::BottomLeft,
+                4 => self.0 = VertexColorId::BottomRight,
+                _ => unimplemented!(),
+            }
         }
 
         fn edit_content(content: &mut Self::Content, ui: &mut egui::Ui) {
