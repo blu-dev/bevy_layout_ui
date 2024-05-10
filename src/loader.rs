@@ -301,7 +301,7 @@ impl VisitAssetDependencies for Layout {
     }
 }
 
-#[derive(Component, Clone, Deref, DerefMut)]
+#[derive(Component, Clone, Deref, DerefMut, Default)]
 pub struct NodeUserDataLabels(Vec<Interned<dyn UserDataLabel>>);
 
 #[derive(Component, Debug, Copy, Clone, PartialEq, Eq, Hash)]

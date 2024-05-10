@@ -14,7 +14,7 @@ use crate::{
         null::{NullNode, NullNodeLabel},
         sublayout::SpawnedSublayout,
     },
-    loader::DynamicNodeLabel,
+    loader::{DynamicNodeLabel, NodeUserDataLabels},
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{SkipNodeRender, UiNodeSettings, VertexColors},
     NodeLabel,
@@ -314,6 +314,7 @@ fn display_node_tree_impl(
                                 DynamicNodeLabel(NullNodeLabel.intern()),
                                 NullNode,
                                 SkipNodeRender,
+                                NodeUserDataLabels::default(),
                             ))
                             .id(),
                     );
