@@ -7,9 +7,10 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    loader::Layout, render::SkipNodeRender, EditorUiNode, NodeLabel, UiNodeApp, UserUiNode,
-};
+#[cfg(feature = "editor-ui")]
+use crate::EditorUiNode;
+
+use crate::{loader::Layout, render::SkipNodeRender, NodeLabel, UiNodeApp, UserUiNode};
 
 pub struct SublayoutNodePlugin;
 
@@ -108,6 +109,7 @@ impl UserUiNode for SublayoutNode {
     }
 }
 
+#[cfg(feature = "editor-ui")]
 impl EditorUiNode for SublayoutNode {
     fn edit(entity: &mut EntityWorldMut, ui: &mut egui::Ui) {
         #[allow(dead_code)]

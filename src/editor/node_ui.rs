@@ -6,14 +6,16 @@ use bevy::{
     },
     hierarchy::Parent,
     sprite::Anchor,
+    utils::intern::Interned,
 };
-use egui::{DragValue, SelectableLabel};
+use egui::{Button, DragValue, SelectableLabel};
 
 use crate::{
     animations::UiLayoutAnimationController,
-    loader::DynamicNodeLabel,
+    loader::{DynamicNodeLabel, NodeUserDataLabels},
     math::{NodeSize, Transform, ZIndex},
     render::UiNodeSettings,
+    user_data::{EditorUserDataRegistry, UserDataLabel, UserDataRegistry},
     EditorUiNodeRegistry, UiNodeRegistry,
 };
 
@@ -209,6 +211,71 @@ pub fn display_ui_node_editor(node: Entity, world: &mut World, ui: &mut egui::Ui
 
     let mut settings = entity.take::<UiNodeSettings>().unwrap();
     bevy_inspector_egui::bevy_inspector::ui_for_value(&mut settings, ui, world);
+    let mut entity = world.entity_mut(node);
+    entity.insert(settings);
 
-    world.entity_mut(node).insert(settings);
+    ui.collapsing("User Data", |ui| {
+        let registry = entity.world().resource::<UserDataRegistry>().clone();
+        let registry = registry.read().unwrap();
+        let editor_registry = entity.world().resource::<EditorUserDataRegistry>().clone();
+        let editor_registry = editor_registry.read().unwrap();
+        let mut labels = entity.take::<NodeUserDataLabels>().unwrap();
+
+        let mut user_datas = registry.by_name.iter().collect::<Vec<_>>();
+        user_datas.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let id = ui.id().with("current-user-data");
+        let mut selected: Option<Interned<dyn UserDataLabel>> =
+            ui.data_mut(|data| *data.get_temp_mut_or_default(id));
+        let current_text = match selected.as_ref() {
+            Some(label) => registry.by_label.get(label).unwrap().name,
+            None => "",
+        };
+
+        ui.horizontal(|ui| {
+            egui::ComboBox::new("user-data-picker", "")
+                .selected_text(current_text)
+                .show_ui(ui, |ui| {
+                    for (name, label) in user_datas {
+                        if ui
+                            .add_enabled(
+                                editor_registry.by_label.contains_key(label),
+                                SelectableLabel::new(Some(*label) == selected, *name),
+                            )
+                            .clicked()
+                        {
+                            selected = Some(*label);
+                        }
+                    }
+                });
+
+            if let Some(current) = selected {
+                if let Some(pos) = labels.iter().position(|label| current.eq(label)) {
+                    let enabled = editor_registry.by_label.contains_key(&current);
+                    if ui.add_enabled(enabled, Button::new("Remove")).clicked() {
+                        labels.remove(pos);
+                        let registered = editor_registry.by_label.get(&current).unwrap();
+                        (registered.cleanup)(&mut entity);
+                        selected = None;
+                    }
+                } else if ui.button("Add").clicked() {
+                    labels.push(current);
+                    let registered = editor_registry.by_label.get(&current).unwrap();
+                    (registered.from_world_and_init)(&mut entity);
+                }
+            }
+        });
+
+        if let Some(current) = selected {
+            if labels.contains(&current) {
+                if let Some(registered) = editor_registry.by_label.get(&current) {
+                    (registered.edit)(&mut entity, ui);
+                }
+            }
+        }
+
+        ui.data_mut(|data| data.insert_temp(id, selected));
+
+        entity.insert(labels);
+    });
 }

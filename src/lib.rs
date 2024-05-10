@@ -18,9 +18,12 @@ use serde::{
     Deserialize, Serialize,
 };
 use serde_value::ValueDeserializer;
+use user_data::{UserData, UserDataRegistry};
 
 #[cfg(feature = "editor-ui")]
 use crate::animations::EditorAnimationTargetRegistry;
+#[cfg(feature = "editor-ui")]
+use crate::user_data::EditorUserDataRegistry;
 
 #[cfg(feature = "editor-ui")]
 pub mod editor;
@@ -67,11 +70,33 @@ macro_rules! decl_animation_label {
     };
 }
 
+#[macro_export]
+macro_rules! decl_user_data_label {
+    ($name:ident) => {
+        impl $crate::user_data::UserDataLabel for $name {
+            fn dyn_clone(&self) -> Box<dyn $crate::user_data::UserDataLabel> {
+                Box::new(self.clone())
+            }
+
+            fn as_dyn_eq(&self) -> &dyn bevy::utils::label::DynEq {
+                self
+            }
+
+            fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+                let ty_id = std::any::TypeId::of::<Self>();
+                std::hash::Hash::hash(&ty_id, &mut state);
+                std::hash::Hash::hash(self, &mut state);
+            }
+        }
+    };
+}
+
 pub mod animations;
 pub mod builtins;
 pub mod loader;
 pub mod math;
 pub mod render;
+pub mod user_data;
 
 bevy::utils::define_label!(NodeLabel, NODE_LABEL_INTERNER);
 
@@ -257,20 +282,24 @@ impl Plugin for UiLayoutPlugin {
 
         let node_reg = UiNodeRegistry::default();
         let target_reg = AnimationTargetRegistry::default();
+        let ud_reg = UserDataRegistry::default();
 
         #[cfg(feature = "editor-ui")]
         {
             app.init_resource::<EditorUiNodeRegistry>();
             app.init_resource::<EditorAnimationTargetRegistry>();
+            app.init_resource::<EditorUserDataRegistry>();
         }
 
         app.register_asset_loader(LayoutAssetLoader {
             ui_node_registry: node_reg.0.clone(),
             ui_animation_registry: target_reg.0.clone(),
+            user_data_registry: ud_reg.0.clone(),
         })
         .init_asset::<Layout>()
         .insert_resource(node_reg)
         .insert_resource(target_reg)
+        .insert_resource(ud_reg)
         .register_type::<math::Transform>()
         .register_type::<math::GlobalTransform>()
         .register_type::<math::BoundingBox>()
@@ -286,12 +315,16 @@ impl Plugin for UiLayoutPlugin {
 pub trait UiNodeApp {
     fn register_user_ui_node<T: UserUiNode>(&mut self) -> &mut Self;
     fn register_animation_target<T: AnimationTarget>(&mut self) -> &mut Self;
+    fn register_user_data<T: UserData>(&mut self) -> &mut Self;
     #[cfg(feature = "editor-ui")]
     fn register_editor_ui_node<T: EditorUiNode>(&mut self) -> &mut Self;
     #[cfg(feature = "editor-ui")]
     fn register_editor_animation_target<T: animations::EditorAnimationTarget>(
         &mut self,
     ) -> &mut Self;
+
+    #[cfg(feature = "editor-ui")]
+    fn register_editor_user_data<T: user_data::EditorUserData>(&mut self) -> &mut Self;
 }
 
 impl UiNodeApp for App {
@@ -312,6 +345,15 @@ impl UiNodeApp for App {
             .unwrap()
             .register::<T>();
 
+        self
+    }
+
+    fn register_user_data<T: UserData>(&mut self) -> &mut Self {
+        self.world
+            .resource::<UserDataRegistry>()
+            .write()
+            .unwrap()
+            .register::<T>();
         self
     }
 
@@ -336,6 +378,15 @@ impl UiNodeApp for App {
             .unwrap()
             .register::<T>();
 
+        self
+    }
+
+    fn register_editor_user_data<T: user_data::EditorUserData>(&mut self) -> &mut Self {
+        self.world
+            .resource::<EditorUserDataRegistry>()
+            .write()
+            .unwrap()
+            .register::<T>();
         self
     }
 }

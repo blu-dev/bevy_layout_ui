@@ -9,6 +9,7 @@ use bevy::{
     ecs::{component::Component, entity::Entity, world::World},
     hierarchy::{BuildWorldChildren, Children, Parent},
     math::{UVec2, Vec2},
+    prelude::{Deref, DerefMut},
     reflect::{Reflect, TypePath},
     sprite::Anchor,
     utils::{intern::Interned, HashMap},
@@ -26,6 +27,7 @@ use crate::{
     builtins::sublayout::SpawnedSublayout,
     math::{GlobalTransform, NodeSize, Transform, ZIndex},
     render::{SkipNodeRender, UiNodeSettings, VertexColors},
+    user_data::{DynamicUserData, RegisteredUserData, UserDataLabel, UserDataRegistry},
     NodeLabel, RegisteredUiNode, RegisteredUserUiNodes, UiNodeRegistry,
 };
 
@@ -33,6 +35,7 @@ use crate::{
 pub struct LayoutAssetLoader {
     pub(crate) ui_node_registry: Arc<RwLock<RegisteredUserUiNodes>>,
     pub(crate) ui_animation_registry: Arc<RwLock<RegisteredAnimationTargets>>,
+    pub(crate) user_data_registry: Arc<RwLock<RegisteredUserData>>,
 }
 
 #[derive(Error, Debug)]
@@ -45,6 +48,8 @@ pub enum LayoutAssetLoaderError {
     MissingNode(String),
     #[error("AnimationTarget {0} is missing from the registry")]
     MissingAnimationTarget(String),
+    #[error("UserData {0} is missing from the registry")]
+    MissingUserData(String),
 }
 
 fn parse_animations(
@@ -103,25 +108,48 @@ fn parse_animations(
 fn parse_nodes(
     repr: Vec<UiNodeRepr>,
     registry: &RegisteredUserUiNodes,
+    ud_registry: &RegisteredUserData,
     load_context: &mut LoadContext,
 ) -> Result<Vec<UiNode>, LayoutAssetLoaderError> {
     let mut nodes = vec![];
     for node_repr in repr {
-        let children = parse_nodes(node_repr.children, registry, load_context)?;
+        let children = parse_nodes(node_repr.children, registry, ud_registry, load_context)?;
 
         let label = registry
             .by_name
             .get(node_repr.node_kind.as_str())
             .ok_or_else(|| LayoutAssetLoaderError::MissingNode(node_repr.node_kind))?;
 
-        let data = registry.by_label.get(label).unwrap();
+        let registered = registry.by_label.get(label).unwrap();
+
+        let data = (registered.deserialize)(node_repr.node_data, load_context)?;
+
+        let user_data = node_repr
+            .user_data
+            .into_iter()
+            .map(|(string, data)| {
+                let label = ud_registry
+                    .by_name
+                    .get(string.as_str())
+                    .ok_or_else(|| LayoutAssetLoaderError::MissingUserData(string))?;
+
+                let registered = ud_registry.by_label.get(label).unwrap();
+                let data = (registered.deserialize)(data)?;
+                Ok(UserDataValue {
+                    data,
+                    registered: *registered,
+                })
+            })
+            .collect::<Result<Vec<_>, LayoutAssetLoaderError>>()?;
+
         nodes.push(UiNode {
             name: node_repr.name,
             attributes: node_repr.attributes,
             label: label.clone(),
-            data: (data.deserialize)(node_repr.node_data, load_context)?,
-            registered_ui_node: *data,
+            data,
+            registered_ui_node: *registered,
             children,
+            user_data,
         });
     }
 
@@ -151,8 +179,9 @@ impl AssetLoader for LayoutAssetLoader {
 
             let node_reg = self.ui_node_registry.read().unwrap();
             let anim_reg = self.ui_animation_registry.read().unwrap();
+            let ud_reg = self.user_data_registry.read().unwrap();
 
-            let nodes = parse_nodes(repr.nodes, &node_reg, load_context)?;
+            let nodes = parse_nodes(repr.nodes, &node_reg, &ud_reg, load_context)?;
             let animations = parse_animations(repr.animations, &anim_reg)?;
 
             Ok(Layout {
@@ -179,6 +208,11 @@ enum AnchorLocal {
     Custom(Vec2),
 }
 
+pub struct UserDataValue {
+    pub data: Box<dyn Any + Send + Sync + 'static>,
+    pub registered: DynamicUserData,
+}
+
 pub struct UiNode {
     pub name: String,
     pub attributes: UiNodeAttributes,
@@ -186,6 +220,7 @@ pub struct UiNode {
     pub data: Box<dyn Any + Send + Sync + 'static>,
     pub registered_ui_node: RegisteredUiNode,
     pub children: Vec<UiNode>,
+    pub user_data: Vec<UserDataValue>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -196,6 +231,8 @@ struct UiNodeRepr {
     children: Vec<UiNodeRepr>,
     node_kind: String,
     node_data: serde_value::Value,
+    #[serde(default)]
+    user_data: IndexMap<String, serde_value::Value>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -264,6 +301,9 @@ impl VisitAssetDependencies for Layout {
     }
 }
 
+#[derive(Component, Clone, Deref, DerefMut)]
+pub struct NodeUserDataLabels(Vec<Interned<dyn UserDataLabel>>);
+
 #[derive(Component, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 
@@ -302,6 +342,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                     .collect(),
                 backup_state: HashMap::new(),
             },
+            NodeUserDataLabels(vec![]),
         ))
         .id();
 
@@ -330,6 +371,7 @@ fn spawn_layout_inner(
             Some(name) => format!("{name}.{}", node.name),
             None => node.name.clone(),
         };
+
         let mut entity = world.spawn((
             Transform::from_position(node.attributes.position)
                 .with_scale(node.attributes.scale)
@@ -346,9 +388,18 @@ fn spawn_layout_inner(
             ZIndex(*z_index),
             DynamicNodeLabel(node.label),
             Name::new(node_name.clone()),
+            NodeUserDataLabels(vec![]),
         ));
 
         (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);
+
+        for user_data in node.user_data.iter() {
+            (user_data.registered.initialize)(user_data.data.as_ref(), &mut entity);
+            entity
+                .get_mut::<NodeUserDataLabels>()
+                .unwrap()
+                .push(user_data.registered.label);
+        }
 
         let node_id = entity.id();
 
@@ -365,17 +416,35 @@ fn spawn_layout_inner(
     }
 }
 
-fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Entity) -> UiNode {
+fn marshall_ui_node(
+    world: &World,
+    registry: &RegisteredUserUiNodes,
+    ud_registry: &RegisteredUserData,
+    entity: Entity,
+) -> UiNode {
     let node = world.entity(entity);
 
     let transform = node.get::<Transform>().unwrap();
     let anchor = node.get::<Anchor>().unwrap();
     let size = node.get::<NodeSize>().unwrap();
     let label = node.get::<DynamicNodeLabel>().unwrap();
+    let ud = node.get::<NodeUserDataLabels>().unwrap();
 
     let registered_node = registry.by_label.get(&label.0).unwrap();
 
     let reconstructed = (registered_node.reconstruct)(node);
+
+    let user_data =
+        ud.0.iter()
+            .map(|label| {
+                let registered = ud_registry.by_label.get(label).unwrap();
+                let data = (registered.reconstruct)(node.clone());
+                UserDataValue {
+                    data,
+                    registered: *registered,
+                }
+            })
+            .collect::<Vec<_>>();
 
     let mut ui_node = UiNode {
         name: node
@@ -398,6 +467,7 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
         label: label.0,
         data: reconstructed,
         registered_ui_node: *registered_node,
+        user_data,
         children: vec![],
     };
 
@@ -406,7 +476,7 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
             world
                 .get::<SpawnedSublayout>(*child)
                 .is_none()
-                .then(|| marshall_ui_node(world, registry, *child))
+                .then(|| marshall_ui_node(world, registry, ud_registry, *child))
         }));
     }
 
@@ -416,6 +486,8 @@ fn marshall_ui_node(world: &World, registry: &RegisteredUserUiNodes, entity: Ent
 pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
     let registry = world.resource::<UiNodeRegistry>();
     let registry = registry.read().unwrap();
+    let ud_registry = world.resource::<UserDataRegistry>();
+    let ud_registry = ud_registry.read().unwrap();
     let root = world.entity(root_entity);
     if root.contains::<Parent>() {
         panic!("Cannot serialize node tree because the root entity has a parent");
@@ -428,7 +500,7 @@ pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
             world
                 .get::<SpawnedSublayout>(*child)
                 .is_none()
-                .then(|| marshall_ui_node(world, &registry, *child))
+                .then(|| marshall_ui_node(world, &registry, &ud_registry, *child))
         }));
     }
 
@@ -457,6 +529,16 @@ fn get_nodes_as_nodes_repr(
             node_kind: node.registered_ui_node.name.to_string(),
             node_data: (node.registered_ui_node.serialize)(node.data.as_ref(), world)?,
             children: get_nodes_as_nodes_repr(&node.children, world)?,
+            user_data: node
+                .user_data
+                .iter()
+                .map(|ud| {
+                    Ok((
+                        ud.registered.name.to_string(),
+                        (ud.registered.serialize)(ud.data.as_ref())?,
+                    ))
+                })
+                .collect::<Result<_, serde_json::Error>>()?,
         });
     }
 

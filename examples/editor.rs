@@ -7,7 +7,7 @@ use bevy::{
     asset::RecursiveDependencyLoadState,
     prelude::*,
     render::{camera::Viewport, view::RenderLayers},
-    utils::HashMap,
+    utils::{intern::Interned, HashMap},
     window::PrimaryWindow,
 };
 use bevy_inspector_egui::{
@@ -15,10 +15,16 @@ use bevy_inspector_egui::{
     DefaultInspectorConfigPlugin,
 };
 use bevy_layout_ui::{
-    builtins::DefaultNodePluginGroup, loader::Layout, render::UiRenderPlugin, UiLayoutPlugin,
+    builtins::DefaultNodePluginGroup,
+    decl_user_data_label,
+    loader::Layout,
+    render::UiRenderPlugin,
+    user_data::{EditorUserData, UserData, UserDataLabel},
+    UiLayoutPlugin, UiNodeApp,
 };
 use egui::{Align, ScrollArea};
 use egui_dock::{DockArea, DockState, TabViewer};
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 enum ColumnWeight {
@@ -432,6 +438,49 @@ pub fn ui_system(world: &mut World) {
     world.insert_resource(state);
 }
 
+#[derive(Serialize, Deserialize, Component, Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct SampleUserData;
+
+decl_user_data_label!(SampleUserData);
+
+impl UserData for SampleUserData {
+    type Serde = Self;
+
+    const NAME: &'static str = "Sample";
+
+    fn deserialize(this: Self::Serde) -> Result<Self, serde_json::Error> {
+        Ok(this)
+    }
+
+    fn serialize(&self) -> Self::Serde {
+        *self
+    }
+
+    fn initialize(&self, entity: &mut EntityWorldMut) {
+        entity.insert(*self);
+    }
+
+    fn reconstruct(entity: EntityRef) -> Self {
+        *entity.get::<Self>().unwrap()
+    }
+
+    fn label() -> Interned<dyn UserDataLabel> {
+        SampleUserData.intern()
+    }
+
+    fn visit_asset_dependencies(&self, _: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {}
+}
+
+impl EditorUserData for SampleUserData {
+    fn cleanup(entity: &mut EntityWorldMut) {
+        entity.remove::<Self>();
+    }
+
+    fn edit(_: &mut EntityWorldMut, ui: &mut egui::Ui) {
+        ui.label("Epic Style!");
+    }
+}
+
 pub fn main() {
     let mut app = App::new();
 
@@ -442,7 +491,9 @@ pub fn main() {
         DefaultNodePluginGroup,
         EguiPlugin,
         DefaultInspectorConfigPlugin,
-    ));
+    ))
+    .register_user_data::<SampleUserData>()
+    .register_editor_user_data::<SampleUserData>();
 
     app.add_systems(Update, (bevy::window::close_on_esc, ui_system))
         .init_resource::<EditorUiState>();
