@@ -316,6 +316,7 @@ fn display_node_tree_impl(
                                 Anchor::TopLeft,
                                 NodeSize(Vec2::splat(50.0)),
                                 UiNodeSettings {
+                                    clip_rect: None,
                                     target_resolution: UVec2::new(1920, 1080),
                                     vertex_colors: VertexColors::default(),
                                     opacity: 1.0,

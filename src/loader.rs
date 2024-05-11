@@ -8,7 +8,7 @@ use bevy::{
     core::Name,
     ecs::{component::Component, entity::Entity, world::World},
     hierarchy::{BuildWorldChildren, Children, Parent},
-    math::{UVec2, Vec2},
+    math::{Rect, UVec2, Vec2},
     prelude::{Deref, DerefMut},
     reflect::{Reflect, TypePath},
     render::view::VisibilityBundle,
@@ -295,6 +295,8 @@ pub struct UiNodeAttributes {
     pub rotation: f32,
     #[serde(default)]
     pub vertex_colors: VertexColors,
+    #[serde(default)]
+    pub clip_rect: Option<Rect>,
 }
 
 #[derive(TypePath)]
@@ -341,6 +343,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
             Anchor::TopLeft,
             NodeSize(layout.resolution.as_vec2()),
             UiNodeSettings {
+                clip_rect: None,
                 target_resolution: layout.resolution,
                 vertex_colors: VertexColors::default(),
                 opacity: 1.0,
@@ -410,6 +413,7 @@ fn spawn_layout_inner<'a>(
             node.attributes.position_anchor,
             NodeSize(node.attributes.size),
             UiNodeSettings {
+                clip_rect: node.attributes.clip_rect,
                 target_resolution: resolution,
                 vertex_colors: node.attributes.vertex_colors,
                 opacity: 1.0,
@@ -506,6 +510,7 @@ fn marshall_ui_node(
             position_anchor: *anchor,
             size: size.0,
             vertex_colors: node.get::<UiNodeSettings>().unwrap().vertex_colors,
+            clip_rect: node.get::<UiNodeSettings>().unwrap().clip_rect,
         },
         label: label.0,
         data: reconstructed,

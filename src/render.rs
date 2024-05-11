@@ -1,3 +1,4 @@
+use std::f32::{INFINITY, NEG_INFINITY};
 use std::ops::Range;
 
 use bevy::app::Plugin;
@@ -202,6 +203,7 @@ impl NodeVertexInput {
 pub struct CommonNodeUniform {
     layout_to_ndc: [Vec4; 3],
     vertex_colors: [Vec4; 4],
+    clip_rect: Vec4,
     opacity: f32,
 }
 
@@ -218,6 +220,7 @@ impl CommonNodeUniform {
         Self {
             layout_to_ndc: [Vec4::ZERO; 3],
             vertex_colors: [Vec4::ONE; 4],
+            clip_rect: Vec4::new(NEG_INFINITY, NEG_INFINITY, INFINITY, INFINITY),
             opacity: 1.0,
         }
     }
@@ -246,6 +249,17 @@ impl CommonNodeUniform {
         self.vertex_colors[1] = top_right.as_linear_rgba_f32().into();
         self.vertex_colors[2] = bottom_left.as_linear_rgba_f32().into();
         self.vertex_colors[3] = bottom_right.as_linear_rgba_f32().into();
+        self
+    }
+
+    pub fn with_clip_rect(mut self, rect: Option<Rect>) -> Self {
+        let Some(rect) = rect else {
+            return self;
+        };
+        self.clip_rect.x = rect.min.x;
+        self.clip_rect.y = rect.min.y;
+        self.clip_rect.z = rect.max.x;
+        self.clip_rect.w = rect.max.y;
         self
     }
 
@@ -452,6 +466,7 @@ impl FromWorld for DefaultNodePipeline {
 
 #[derive(Component, Debug, Copy, Clone, Reflect)]
 pub struct UiNodeSettings {
+    pub clip_rect: Option<Rect>,
     pub target_resolution: UVec2,
     pub vertex_colors: VertexColors,
     pub opacity: f32,
@@ -621,6 +636,7 @@ pub fn prepare_ui_nodes(
                             node.settings.vertex_colors.bottom_left(),
                             node.settings.vertex_colors.bottom_right(),
                         )
+                        .with_clip_rect(node.settings.clip_rect)
                         .with_opacity(node.settings.opacity),
                 );
                 item.dynamic_offset = NonMaxU32::new(offset);

@@ -1,4 +1,6 @@
-#import bevy_layout_ui::{NodeVertexInput, CommonNodeUniform, transform_node_to_screen}
+#import bevy_layout_ui::{
+    NodeVertexInput, CommonNodeUniform, transform_node_to_screen, preprocess_fragment, postprocess_fragment
+}
 
 @group(0) @binding(0) var<uniform> view: CommonNodeUniform;
 
@@ -14,7 +16,6 @@
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) vertex_color: vec4<f32>,
 };
 
 @vertex
@@ -31,18 +32,19 @@ fn vertex(
     let pos = transform_node_to_screen(in, view.layout_to_ndc, vertex);
     output.position = vec4<f32>(pos, 0.0, 1.0);
     output.uv = vertex;
-    output.vertex_color = view.vertex_colors[vertex_index];
 
     return output;
 }
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    var sample = textureSample(color_texture, color_sampler, in.uv) * in.vertex_color;
+    preprocess_fragment(in.uv, view.clip_rect);
+
+    var sample = textureSample(color_texture, color_sampler, in.uv);
 
 #ifdef USE_MASK_IMAGE
     sample.a *= textureSample(mask_texture, mask_sampler, in.uv).a;
 #endif
 
-    return sample;
+    return postprocess_fragment(in.uv, sample, view);
 }
