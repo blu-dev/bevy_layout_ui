@@ -533,7 +533,7 @@ const _: () = {
         }
 
         fn default_content() -> Self::Content {
-            Vec2::splat(1.0)
+            Vec2::ZERO
         }
     }
 

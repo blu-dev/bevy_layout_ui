@@ -253,10 +253,13 @@ impl BufferGlyphMaps {
             let glyph_id = GlyphId(glyph.glyph_id);
             if !set.cursor.allocations.contains_key(&glyph_id) {
                 let physical_glyph = glyph.physical((0., 0.), 1.0);
-                let image = cache
+                let Some(image) = cache
                     .get_image(font_system, physical_glyph.cache_key)
                     .as_ref()
-                    .unwrap();
+                else {
+                    bevy::log::error!("Failed to get glyph!");
+                    continue;
+                };
                 let plc = image.placement;
 
                 while set

@@ -58,11 +58,16 @@ fn add_button(ui: &mut egui::Ui) -> Response {
     .inner
 }
 
+pub enum ListAction<T> {
+    Selected(T),
+    Removed(T),
+}
+
 pub fn display_animation_list(
     root_entity: Entity,
     world: &mut World,
     ui: &mut egui::Ui,
-) -> Option<usize> {
+) -> Option<ListAction<usize>> {
     let mut entity = world.entity_mut(root_entity);
     let mut animations = entity.get_mut::<UiLayoutAnimationController>().unwrap();
     let animation_names = animations.animations.keys().cloned().collect::<Vec<_>>();
@@ -78,11 +83,14 @@ pub fn display_animation_list(
                         restore_on_finish: true,
                     },
                 );
+            } else if ui.button("Remove").clicked() {
+                animations.animations.shift_remove_index(idx);
+                result = Some(ListAction::Removed(idx));
             }
         });
 
         if resp.clicked() {
-            result = result.or_else(|| Some(idx));
+            result = result.or_else(|| Some(ListAction::Selected(idx)));
         }
     }
 
@@ -98,6 +106,8 @@ pub fn display_animation_list(
                     requests: vec![],
                 },
             );
+
+            result = result.or_else(|| Some(ListAction::Selected(animations.animations.len() - 1)));
         }
     }
 
@@ -114,7 +124,7 @@ pub fn display_node_tree(
     root_entity: Entity,
     world: &mut World,
     ui: &mut egui::Ui,
-) -> Option<Entity> {
+) -> Option<ListAction<Entity>> {
     let mut command_queue = CommandQueue::default();
     let mut commands = Commands::new(&mut command_queue, world);
 
@@ -242,7 +252,7 @@ fn display_node_tree_impl(
     root_id: egui::Id,
     tracker: &mut DragTracker,
     show_parent: bool,
-) -> Option<Entity> {
+) -> Option<ListAction<Entity>> {
     let name = get_name(root_entity, world);
 
     let id = ui.id().with(&name);
@@ -297,7 +307,7 @@ fn display_node_tree_impl(
             if add_button(ui).clicked() {
                 let parent_name = world.get::<Name>(root_entity).unwrap().to_string();
                 commands.entity(root_entity).with_children(|children| {
-                    resp = Some(
+                    resp = Some(ListAction::Selected(
                         children
                             .spawn((
                                 Name::new(format!("{parent_name}.New Node")),
@@ -317,7 +327,7 @@ fn display_node_tree_impl(
                                 NodeUserDataLabels::default(),
                             ))
                             .id(),
-                    );
+                    ));
                 });
             }
 
@@ -337,16 +347,16 @@ fn display_node_tree_impl(
 
             resp.header_response
                 .double_clicked()
-                .then_some(root_entity)
+                .then_some(ListAction::Selected(root_entity))
                 .or(resp.body_returned.flatten())
         } else {
             inner(ui)
         }
     } else {
         let resp = ui.add(DraggableLabel::new(false, &name));
-        let ret = if resp.clicked() {
+        let mut ret = if resp.clicked() {
             set_entity_openness(ui.ctx(), ui.id().with(&name), true);
-            Some(root_entity)
+            Some(ListAction::Selected(root_entity))
         } else if resp.drag_started() {
             set_dragging_entity(ui.ctx(), root_id, Some(root_entity));
             None
@@ -356,6 +366,7 @@ fn display_node_tree_impl(
 
         resp.context_menu(|ui| {
             if ui.button("Remove").clicked() {
+                ret = Some(ListAction::Removed(root_entity));
                 commands.entity(root_entity).despawn_recursive();
                 ui.close_menu();
             }

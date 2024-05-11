@@ -157,16 +157,28 @@ pub fn show_animation_editor(
             });
 
             for name in node_names {
-                if ui[0]
-                    .selectable_label(Some(&name) == state.selected_node.as_ref(), &name)
-                    .clicked()
-                {
+                let resp =
+                    ui[0].selectable_label(Some(&name) == state.selected_node.as_ref(), &name);
+
+                if resp.clicked() {
                     if Some(&name) != state.selected_node.as_ref() {
-                        state.selected_node = Some(name);
+                        state.selected_node = Some(name.clone());
                         state.selected_target = None;
                         state.selected_keyframe = None;
                     }
                 }
+
+                resp.context_menu(|ui| {
+                    if ui.button("Remove").clicked() {
+                        ui.close_menu();
+                        animation.animation_by_node.remove(&name);
+                        if Some(&name) == state.selected_node.as_ref() {
+                            state.selected_node = None;
+                            state.selected_target = None;
+                            state.selected_keyframe = None;
+                        }
+                    }
+                });
             }
 
             let mut available_node_names = children
@@ -178,7 +190,7 @@ pub fn show_animation_editor(
             if available_node_names.is_empty() {
                 ui[0].horizontal(|ui| {
                     ui.add_enabled_ui(false, |ui| {
-                        egui::ComboBox::new("add-new-node", "Add Node")
+                        egui::ComboBox::new("add-new-node", "")
                             .selected_text("")
                             .show_ui(ui, |_| {});
                         add_button(ui);
@@ -187,32 +199,49 @@ pub fn show_animation_editor(
             } else {
                 ui[0].horizontal(|ui| {
                     let id = ui.id().with("selected-new-node");
-                    let current_node =
-                        ui.data_mut(|data| data.get_temp_mut_or_default::<String>(id).clone());
-                    egui::ComboBox::new("add-new-node", "Add Node")
-                        .selected_text(&current_node)
+                    let mut current_node = ui.data_mut(|data| {
+                        data.get_temp_mut_or_default::<Option<String>>(id).clone()
+                    });
+
+                    let current_text = if let Some(current) = current_node.as_ref() {
+                        current.as_str()
+                    } else {
+                        ""
+                    };
+
+                    egui::ComboBox::new("add-new-node", "")
+                        .selected_text(current_text)
                         .show_ui(ui, |ui| {
                             for node_name in available_node_names.iter() {
                                 if ui
-                                    .selectable_label(node_name.eq(&current_node), node_name)
+                                    .selectable_label(
+                                        Some(node_name) == current_node.as_ref(),
+                                        node_name,
+                                    )
                                     .clicked()
                                 {
-                                    ui.data_mut(|data| data.insert_temp(id, node_name.clone()));
+                                    current_node = Some(node_name.clone());
                                 }
                             }
                         });
-                    if add_button(ui).clicked() {
-                        state.selected_node = Some(current_node.clone());
+                    if ui
+                        .add_enabled_ui(current_node.is_some(), |ui| add_button(ui))
+                        .inner
+                        .clicked()
+                    {
+                        let name = current_node.take().unwrap();
+                        state.selected_node = Some(name.clone());
                         state.selected_target = None;
                         state.selected_keyframe = None;
                         ui.data_mut(|data| data.remove_temp::<String>(id));
                         animation.animation_by_node.insert(
-                            current_node,
+                            name,
                             AnimationNodeLane {
                                 animation_by_id: Default::default(),
                             },
                         );
                     }
+                    ui.data_mut(|data| data.insert_temp(id, current_node));
                 });
             }
 
@@ -220,33 +249,49 @@ pub fn show_animation_editor(
                 return;
             };
 
-            let lane = animation.animation_by_node.get_mut(name).unwrap();
+            let node_lane = animation.animation_by_node.get_mut(name).unwrap();
 
-            for (idx, lane) in lane.animation_by_id.iter().enumerate() {
+            let mut idx = 0;
+            while idx < node_lane.animation_by_id.len() {
+                let lane = &node_lane.animation_by_id[idx];
                 let name = registry.by_label.get(&lane.target).unwrap().name;
-                if ui[1]
-                    .selectable_label(Some(idx) == state.selected_target, name)
-                    .clicked()
-                {
+                let resp = ui[1].selectable_label(Some(idx) == state.selected_target, name);
+                if resp.clicked() {
                     if Some(idx) != state.selected_target {
                         state.selected_target = Some(idx);
                         state.selected_keyframe = None;
                     }
                 }
+
+                idx += 1;
+
+                resp.context_menu(|ui| {
+                    if ui.button("Remove").clicked() {
+                        ui.close_menu();
+                        idx -= 1;
+                        node_lane.animation_by_id.remove(idx);
+                        match state.selected_target {
+                            Some(sel) if sel == idx => state.selected_target = None,
+                            Some(sel) if sel > idx => state.selected_target = Some(sel - 1),
+                            _ => {}
+                        }
+                    }
+                });
             }
 
+            // NOTE: We use `copied` here because the root node has no label
+            //      and we want to be able to animate the root node
             let entity_node_style = entity
                 .world()
                 .get::<DynamicNodeLabel>(*children.get(name).unwrap())
-                .unwrap()
-                .0
-                .clone();
+                .copied()
+                .map(|label| label.0);
 
             let mut available_targets = registry
                 .by_label
                 .iter()
-                .filter_map(|(id, target)| match target.node_label.as_ref() {
-                    Some(label) if !entity_node_style.eq(label) => return None,
+                .filter_map(|(id, target)| match &target.node_label {
+                    label @ Some(_) if !entity_node_style.eq(label) => return None,
                     _ => Some((id, target.name)),
                 })
                 .collect::<Vec<_>>();
@@ -265,7 +310,7 @@ pub fn show_animation_editor(
             };
 
             ui[1].horizontal(|ui| {
-                egui::ComboBox::new("new-target-selector", "Add Target")
+                egui::ComboBox::new("new-target-selector", "")
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
                         for (label, name) in available_targets {
@@ -290,13 +335,15 @@ pub fn show_animation_editor(
                     let id = selected_id.take().unwrap();
                     let editor_target = editor_registry.by_label.get(&id).unwrap();
                     entity.world_scope(|world| {
-                        lane.animation_by_id.push(AnimationIdLane {
+                        node_lane.animation_by_id.push(AnimationIdLane {
                             target: id,
                             animation_data: (editor_target.from_world)(world),
                             starting_value: (editor_target.default_content)(),
                             keyframes: vec![],
                         });
                     });
+
+                    state.selected_target = Some(node_lane.animation_by_id.len() - 1);
                 }
             });
 
@@ -308,7 +355,7 @@ pub fn show_animation_editor(
                 return;
             };
 
-            let lane = &mut lane.animation_by_id[target];
+            let lane = &mut node_lane.animation_by_id[target];
 
             let target = editor_registry.by_label.get(&lane.target).unwrap();
 
@@ -326,16 +373,30 @@ pub fn show_animation_editor(
                 &mut ui[2],
                 &[ColumnWeight::Relative(20.0), ColumnWeight::Relative(80.0)],
                 |ui| {
-                    for (idx, keyframe) in lane.keyframes.iter().enumerate() {
-                        if ui[0]
-                            .selectable_label(
-                                state.selected_keyframe == Some(idx),
-                                format!("{}ms", keyframe.timestamp_ms),
-                            )
-                            .clicked()
-                        {
+                    let mut idx = 0;
+                    while idx < lane.keyframes.len() {
+                        let keyframe = &lane.keyframes[idx];
+                        let resp = ui[0].selectable_label(
+                            state.selected_keyframe == Some(idx),
+                            format!("{}ms", keyframe.timestamp_ms),
+                        );
+                        if resp.clicked() {
                             state.selected_keyframe = Some(idx);
                         }
+
+                        idx += 1;
+                        resp.context_menu(|ui| {
+                            if ui.button("Remove").clicked() {
+                                idx -= 1;
+                                match state.selected_keyframe {
+                                    Some(sel) if sel == idx => state.selected_keyframe = None,
+                                    Some(sel) if sel > idx => {
+                                        state.selected_keyframe = Some(sel - 1)
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        });
                     }
 
                     if ui[0].button("Add Keyframe").clicked() {

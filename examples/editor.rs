@@ -17,6 +17,7 @@ use bevy_inspector_egui::{
 use bevy_layout_ui::{
     builtins::DefaultNodePluginGroup,
     decl_user_data_label,
+    editor::ListAction,
     loader::Layout,
     render::UiRenderPlugin,
     user_data::{EditorUserData, UserData, UserDataLabel},
@@ -285,16 +286,18 @@ impl TabViewer for EditorViewer<'_> {
                                 .unwrap();
                             }
                             ui.heading("Nodes");
-                            if let Some(entity) =
+                            if let Some(ListAction::Selected(entity)) =
                                 bevy_layout_ui::editor::display_node_tree(entity, self.world, ui)
                             {
                                 self.world.entity_mut(entity).insert(*layer);
                                 *editing = Some(EditingCurrently::Node(entity));
                             }
                             ui.heading("Animations");
-                            if let Some(anim) = bevy_layout_ui::editor::display_animation_list(
-                                entity, self.world, ui,
-                            ) {
+                            if let Some(ListAction::Selected(anim)) =
+                                bevy_layout_ui::editor::display_animation_list(
+                                    entity, self.world, ui,
+                                )
+                            {
                                 *editing = Some(EditingCurrently::Animation(anim));
                             }
                         });

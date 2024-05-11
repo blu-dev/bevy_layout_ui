@@ -1,25 +1,5 @@
 {
   "animations": {
-    "test_animation": {
-      "root.Image Node 1": {
-        "Builtins.Size": {
-          "data": null,
-          "edges": [
-            {
-              "interpolation": "Linear",
-              "timestamp_ms": 200,
-              "value": [1300.0, 15000.0]
-            },
-            {
-              "interpolation": "Linear",
-              "timestamp_ms": 500,
-              "value": [1428.0, 100.0]
-            }
-          ],
-          "starting_value": [100.0, 100.0]
-        }
-      }
-    }
   },
   "nodes": [
     {
@@ -66,5 +46,6 @@
       "size": [100.0, 100.0]
     }
   ],
-  "resolution": [1920, 1080]
+  "resolution": [1920, 1080],
+  "user_data": {}
 }

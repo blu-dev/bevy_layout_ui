@@ -6,6 +6,7 @@ use bevy_inspector_egui::{
 use bevy_layout_ui::{
     animations::{PlaybackRequest, UiLayoutAnimationController},
     builtins::DefaultNodePluginGroup,
+    editor::ListAction,
     loader::Layout,
     math::NodeSize,
     render::UiRenderPlugin,
@@ -70,13 +71,16 @@ fn ui_system(world: &mut World, mut roots: Local<Vec<Entity>>, mut open_nodes: L
                 .unwrap();
             }
 
-            if let Some(entity) = bevy_layout_ui::editor::display_node_tree(root, world, ui) {
+            if let Some(ListAction::Selected(entity)) =
+                bevy_layout_ui::editor::display_node_tree(root, world, ui)
+            {
                 if !open_nodes.contains(&entity) {
                     open_nodes.push(entity);
                 }
             }
 
-            if let Some(animation) = bevy_layout_ui::editor::display_animation_list(root, world, ui)
+            if let Some(ListAction::Selected(animation)) =
+                bevy_layout_ui::editor::display_animation_list(root, world, ui)
             {
                 world
                     .get_mut::<UiLayoutAnimationController>(root)
