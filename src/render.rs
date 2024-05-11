@@ -466,6 +466,7 @@ pub struct ExtractedNode {
     z_index: isize,
     settings: UiNodeSettings,
     layer: RenderLayers,
+    visibility: bool,
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -488,6 +489,7 @@ pub struct ExtractNodeQuery {
     anchor: &'static Anchor,
     settings: &'static UiNodeSettings,
     z_index: &'static ZIndex,
+    inherited: &'static InheritedVisibility,
     layer: Option<&'static RenderLayers>,
 }
 
@@ -511,6 +513,7 @@ pub fn extract_nodes(
                 z_index: data.z_index.0,
                 settings: *data.settings,
                 layer: data.layer.copied().unwrap_or_default(),
+                visibility: data.inherited.get(),
             },
         );
     }
@@ -558,7 +561,7 @@ pub fn queue_ui_nodes(
         .get_id::<DefaultNodeDrawFunction>()
         .unwrap();
     for mut phase in ui_phases.iter_mut() {
-        for (entity, node) in nodes.iter() {
+        for (entity, node) in nodes.iter().filter(|node| node.1.visibility) {
             phase.items.push(UiNodeItem {
                 entity: *entity,
                 z_index: node.z_index,

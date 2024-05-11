@@ -83,10 +83,10 @@ pub struct TextNodeData {
 
 #[derive(Clone, Component)]
 pub struct TextNode {
-    font_face: String,
-    font_size: u32,
-    style: Style,
-    text: String,
+    pub font_face: String,
+    pub font_size: u32,
+    pub style: Style,
+    pub text: String,
 }
 
 impl Default for TextNode {

@@ -28,6 +28,8 @@ use crate::user_data::EditorUserDataRegistry;
 #[cfg(feature = "editor-ui")]
 pub mod editor;
 
+pub mod view;
+
 #[macro_export]
 macro_rules! decl_node_label {
     ($name:ident) => {
@@ -381,6 +383,7 @@ impl UiNodeApp for App {
         self
     }
 
+    #[cfg(feature = "editor-ui")]
     fn register_editor_user_data<T: user_data::EditorUserData>(&mut self) -> &mut Self {
         self.world
             .resource::<EditorUserDataRegistry>()

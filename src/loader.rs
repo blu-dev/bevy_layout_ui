@@ -11,6 +11,7 @@ use bevy::{
     math::{UVec2, Vec2},
     prelude::{Deref, DerefMut},
     reflect::{Reflect, TypePath},
+    render::view::VisibilityBundle,
     sprite::Anchor,
     utils::{intern::Interned, HashMap},
 };
@@ -183,11 +184,28 @@ impl AssetLoader for LayoutAssetLoader {
 
             let nodes = parse_nodes(repr.nodes, &node_reg, &ud_reg, load_context)?;
             let animations = parse_animations(repr.animations, &anim_reg)?;
+            let user_data = repr
+                .user_data
+                .into_iter()
+                .map(|(name, value)| {
+                    let label = ud_reg
+                        .by_name
+                        .get(name.as_str())
+                        .ok_or_else(|| LayoutAssetLoaderError::MissingUserData(name))?;
+                    let registered = ud_reg.by_label.get(label).unwrap();
+                    let value = (registered.deserialize)(value)?;
+                    Ok(UserDataValue {
+                        data: value,
+                        registered: *registered,
+                    })
+                })
+                .collect::<Result<_, LayoutAssetLoaderError>>()?;
 
             Ok(Layout {
                 resolution: repr.resolution,
                 nodes,
                 animations,
+                user_data,
             })
         })
     }
@@ -261,6 +279,7 @@ struct LayoutRepr {
     resolution: UVec2,
     nodes: Vec<UiNodeRepr>,
     animations: IndexMap<String, UiAnimationRepr>,
+    user_data: IndexMap<String, serde_value::Value>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
@@ -283,6 +302,7 @@ pub struct Layout {
     pub resolution: UVec2,
     pub nodes: Vec<UiNode>,
     pub animations: HashMap<String, Arc<RwLock<Animation>>>,
+    pub user_data: Vec<UserDataValue>,
 }
 
 impl Asset for Layout {}
@@ -308,6 +328,8 @@ pub struct NodeUserDataLabels(Vec<Interned<dyn UserDataLabel>>);
 pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 
 pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
+    let mut user_data_cache = Vec::new();
+
     let root_node = world
         .spawn((
             Name::new("root"),
@@ -342,9 +364,12 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                     .collect(),
                 backup_state: HashMap::new(),
             },
+            VisibilityBundle::default(),
             NodeUserDataLabels(vec![]),
         ))
         .id();
+
+    user_data_cache.push((root_node, layout.user_data.as_slice()));
 
     spawn_layout_inner(
         world,
@@ -353,18 +378,22 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
         &layout.nodes,
         &mut 1isize,
         Some("root".to_string()),
+        &mut user_data_cache,
     );
+
+    apply_user_data(world, user_data_cache.into_iter().rev());
 
     root_node
 }
 
-fn spawn_layout_inner(
+fn spawn_layout_inner<'a>(
     world: &mut World,
     root_entity: Entity,
     resolution: UVec2,
-    nodes: &[UiNode],
+    nodes: &'a [UiNode],
     z_index: &mut isize,
     parent_node: Option<String>,
+    user_data_cache: &mut Vec<(Entity, &'a [UserDataValue])>,
 ) {
     for node in nodes.iter() {
         let node_name = match parent_node.as_ref() {
@@ -388,18 +417,13 @@ fn spawn_layout_inner(
             ZIndex(*z_index),
             DynamicNodeLabel(node.label),
             Name::new(node_name.clone()),
+            VisibilityBundle::default(),
             NodeUserDataLabels(vec![]),
         ));
 
-        (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);
+        user_data_cache.push((entity.id(), node.user_data.as_slice()));
 
-        for user_data in node.user_data.iter() {
-            (user_data.registered.initialize)(user_data.data.as_ref(), &mut entity);
-            entity
-                .get_mut::<NodeUserDataLabels>()
-                .unwrap()
-                .push(user_data.registered.label);
-        }
+        (node.registered_ui_node.spawn)(node.data.as_ref(), &mut entity);
 
         let node_id = entity.id();
 
@@ -411,8 +435,27 @@ fn spawn_layout_inner(
             &node.children,
             z_index,
             Some(node_name),
+            user_data_cache,
         );
+
         world.entity_mut(root_entity).add_child(node_id);
+    }
+}
+
+fn apply_user_data<'a>(
+    world: &mut World,
+    user_data: impl IntoIterator<Item = (Entity, &'a [UserDataValue])>,
+) {
+    for (entity, user_data) in user_data {
+        let mut entity = world.entity_mut(entity);
+        for ud in user_data.iter() {
+            (ud.registered.initialize)(ud.data.as_ref(), &mut entity);
+        }
+
+        entity
+            .get_mut::<NodeUserDataLabels>()
+            .unwrap()
+            .extend(user_data.iter().map(|reg| reg.registered.label));
     }
 }
 
@@ -503,6 +546,18 @@ pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
                 .then(|| marshall_ui_node(world, &registry, &ud_registry, *child))
         }));
     }
+    let ud = root.get::<NodeUserDataLabels>().unwrap();
+    let user_data =
+        ud.0.iter()
+            .map(|label| {
+                let registered = ud_registry.by_label.get(label).unwrap();
+                let data = (registered.reconstruct)(root.clone());
+                UserDataValue {
+                    data,
+                    registered: *registered,
+                }
+            })
+            .collect::<Vec<_>>();
 
     Layout {
         resolution,
@@ -514,6 +569,7 @@ pub fn marshall_node_tree(world: &World, root_entity: Entity) -> Layout {
             .iter()
             .map(|(name, state)| (name.clone(), state.animation.clone()))
             .collect(),
+        user_data,
     }
 }
 
@@ -590,5 +646,15 @@ pub fn serialize_layout_as_json(
         resolution: layout.resolution,
         nodes,
         animations,
+        user_data: layout
+            .user_data
+            .iter()
+            .map(|ud| {
+                Ok((
+                    ud.registered.name.to_string(),
+                    (ud.registered.serialize)(ud.data.as_ref())?,
+                ))
+            })
+            .collect::<Result<_, serde_json::Error>>()?,
     })
 }
