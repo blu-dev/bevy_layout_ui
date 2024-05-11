@@ -5,6 +5,12 @@
 @group(1) @binding(0) var color_texture: texture_2d<f32>;
 @group(1) @binding(1) var color_sampler: sampler;
 
+#ifdef USE_MASK_IMAGE
+@group(2) @binding(0) var mask_texture: texture_2d<f32>;
+@group(2) @binding(1) var mask_sampler: sampler;
+
+#endif
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -32,5 +38,11 @@ fn vertex(
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(color_texture, color_sampler, in.uv) * in.vertex_color;
+    var sample = textureSample(color_texture, color_sampler, in.uv) * in.vertex_color;
+
+#ifdef USE_MASK_IMAGE
+    sample.a *= textureSample(mask_texture, mask_sampler, in.uv).a;
+#endif
+
+    return sample;
 }

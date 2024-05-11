@@ -315,6 +315,7 @@ pub struct UiNodeItem {
     pub batch_range: Range<u32>,
     /// The dynamic offset is used as the offset for the [`LayoutUniform`] buffer for this node
     pub dynamic_offset: Option<NonMaxU32>,
+    pub pipeline_id: CachedRenderPipelineId,
 }
 
 impl PhaseItem for UiNodeItem {
@@ -364,7 +365,7 @@ impl NodeDrawFunction {
 pub type DefaultNodeDrawFunction = (
     BindVertexBuffer<0>,
     BindLayoutUniform<0>,
-    BindInvalidPipeline,
+    BindNodePipeline,
     DrawUiPhaseItem,
 );
 
@@ -552,6 +553,7 @@ impl Default for PreparedResources {
 }
 
 pub fn queue_ui_nodes(
+    default_pipeline: Res<DefaultNodePipeline>,
     draw_functions: Res<DrawFunctions<UiNodeItem>>,
     mut ui_phases: Query<&mut RenderPhase<UiNodeItem>>,
     nodes: Res<ExtractedNodes>,
@@ -569,6 +571,7 @@ pub fn queue_ui_nodes(
                 // batch_range and dynamic_offset are set in the prepare step
                 batch_range: 0..0,
                 dynamic_offset: None,
+                pipeline_id: default_pipeline.cached_pipeline_id,
             });
         }
     }
@@ -647,26 +650,25 @@ pub fn prepare_ui_nodes(
     ));
 }
 
+pub struct BindNodePipeline;
 pub struct BindLayoutUniform<const I: usize>;
 pub struct BindVertexBuffer<const I: usize>;
-pub struct BindInvalidPipeline;
 pub struct DrawUiPhaseItem;
 
-impl RenderCommand<UiNodeItem> for BindInvalidPipeline {
-    type Param = (SRes<PipelineCache>, SRes<DefaultNodePipeline>);
+impl RenderCommand<UiNodeItem> for BindNodePipeline {
+    type Param = SRes<PipelineCache>;
     type ItemQuery = ();
     type ViewQuery = ();
 
     fn render<'w>(
-        _item: &UiNodeItem,
+        item: &UiNodeItem,
         _view: ROQueryItem<'w, Self::ViewQuery>,
         _entity: Option<ROQueryItem<'w, Self::ItemQuery>>,
-        (cache, pipeline): SystemParamItem<'w, '_, Self::Param>,
+        cache: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        let pipeline = pipeline.into_inner();
         let cache = cache.into_inner();
-        let Some(pipeline) = cache.get_render_pipeline(pipeline.cached_pipeline_id) else {
+        let Some(pipeline) = cache.get_render_pipeline(item.pipeline_id) else {
             return RenderCommandResult::Failure;
         };
 
