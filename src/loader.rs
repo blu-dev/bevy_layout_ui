@@ -282,6 +282,10 @@ struct LayoutRepr {
     user_data: IndexMap<String, serde_value::Value>,
 }
 
+const fn default_one() -> f32 {
+    1.0
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
 #[reflect(no_field_bounds)]
 pub struct UiNodeAttributes {
@@ -297,6 +301,8 @@ pub struct UiNodeAttributes {
     pub vertex_colors: VertexColors,
     #[serde(default)]
     pub clip_rect: Option<Rect>,
+    #[serde(default = "default_one")]
+    pub opacity: f32,
 }
 
 #[derive(TypePath)]
@@ -435,7 +441,7 @@ fn spawn_layout_inner<'a>(
                 clip_rect: node.attributes.clip_rect,
                 target_resolution: resolution,
                 vertex_colors: node.attributes.vertex_colors,
-                opacity: 1.0,
+                opacity: node.attributes.opacity,
             },
             DynamicNodeLabel(node.label),
             Name::new(node_name.clone()),
@@ -527,6 +533,7 @@ fn marshall_ui_node(
             size: size.0,
             vertex_colors: node.get::<UiNodeSettings>().unwrap().vertex_colors,
             clip_rect: node.get::<UiNodeSettings>().unwrap().clip_rect,
+            opacity: node.get::<UiNodeSettings>().unwrap().opacity,
         },
         label: label.0,
         data: reconstructed,
