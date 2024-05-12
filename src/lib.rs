@@ -13,6 +13,7 @@ use bevy::{
     utils::{intern::Interned, HashMap},
 };
 use loader::{Layout, LayoutAssetLoader};
+use math::ZIndex;
 use serde::{
     de::{DeserializeOwned, Error},
     Deserialize, Serialize,
@@ -309,6 +310,7 @@ impl Plugin for UiLayoutPlugin {
         .register_type::<math::NodeSize>()
         .register_type::<render::UiNodeSettings>()
         .register_type::<render::VertexColors>()
+        .register_type::<ZIndex>()
         .register_type_data::<bevy::render::color::Color, ReflectDefault>()
         .register_type::<loader::UiNodeAttributes>();
     }

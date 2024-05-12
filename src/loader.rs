@@ -329,6 +329,19 @@ pub struct NodeUserDataLabels(Vec<Interned<dyn UserDataLabel>>);
 #[derive(Component, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 
+fn apply_z_index(world: &mut World, children: impl IntoIterator<Item = Entity>, index: &mut isize) {
+    for child in children {
+        world.entity_mut(child).insert(ZIndex(*index));
+        *index += 1;
+        let children = world
+            .get::<Children>(child)
+            .into_iter()
+            .flat_map(|children| children.iter().copied())
+            .collect::<Vec<_>>();
+        apply_z_index(world, children, index);
+    }
+}
+
 pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
     let mut user_data_cache = Vec::new();
 
@@ -348,7 +361,6 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                 vertex_colors: VertexColors::default(),
                 opacity: 1.0,
             },
-            ZIndex(0),
             SkipNodeRender,
             UiLayoutAnimationController {
                 animations: layout
@@ -367,6 +379,7 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                     .collect(),
                 backup_state: HashMap::new(),
             },
+            ZIndex(0),
             VisibilityBundle::default(),
             NodeUserDataLabels(vec![]),
         ))
@@ -379,12 +392,19 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
         root_node,
         layout.resolution,
         &layout.nodes,
-        &mut 1isize,
         Some("root".to_string()),
         &mut user_data_cache,
     );
 
+    let mut z_index = 1isize;
+    let children = world
+        .get::<Children>(root_node)
+        .into_iter()
+        .flat_map(|children| children.iter().copied())
+        .collect::<Vec<_>>();
+
     apply_user_data(world, user_data_cache.into_iter().rev());
+    apply_z_index(world, children, &mut z_index);
 
     root_node
 }
@@ -394,7 +414,6 @@ fn spawn_layout_inner<'a>(
     root_entity: Entity,
     resolution: UVec2,
     nodes: &'a [UiNode],
-    z_index: &mut isize,
     parent_node: Option<String>,
     user_data_cache: &mut Vec<(Entity, &'a [UserDataValue])>,
 ) {
@@ -418,7 +437,6 @@ fn spawn_layout_inner<'a>(
                 vertex_colors: node.attributes.vertex_colors,
                 opacity: 1.0,
             },
-            ZIndex(*z_index),
             DynamicNodeLabel(node.label),
             Name::new(node_name.clone()),
             VisibilityBundle::default(),
@@ -431,13 +449,11 @@ fn spawn_layout_inner<'a>(
 
         let node_id = entity.id();
 
-        *z_index += 1;
         spawn_layout_inner(
             world,
             node_id,
             resolution,
             &node.children,
-            z_index,
             Some(node_name),
             user_data_cache,
         );

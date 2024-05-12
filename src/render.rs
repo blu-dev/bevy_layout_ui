@@ -14,8 +14,8 @@ use bevy::render::camera::ExtractedCamera;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_graph::{RenderGraphApp, RenderLabel, ViewNode, ViewNodeRunner};
 use bevy::render::render_phase::{
-    AddRenderCommand, DrawFunctionId, DrawFunctions, PhaseItem, RenderCommand, RenderCommandResult,
-    RenderPhase, TrackedRenderPass,
+    sort_phase_system, AddRenderCommand, DrawFunctionId, DrawFunctions, PhaseItem, RenderCommand,
+    RenderCommandResult, RenderPhase, TrackedRenderPass,
 };
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
@@ -876,6 +876,7 @@ impl Plugin for UiRenderPlugin {
                 (
                     queue_ui_nodes.in_set(RenderSet::Queue),
                     prepare_ui_nodes.in_set(RenderSet::Prepare),
+                    sort_phase_system::<UiNodeItem>.in_set(RenderSet::PhaseSort),
                 ),
             );
     }

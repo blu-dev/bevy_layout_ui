@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use bevy::{
     asset::{LoadContext, RecursiveDependencyLoadState},
     prelude::*,
-    utils::{intern::Interned, HashSet},
+    utils::intern::Interned,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +22,6 @@ impl Plugin for SublayoutNodePlugin {
         {
             app.register_editor_ui_node::<SublayoutNode>();
         }
-
-        app.add_systems(PostUpdate, spawn_loaded_layouts);
     }
 }
 
@@ -84,9 +82,10 @@ impl UserUiNode for SublayoutNode {
     fn spawn(&self, entity: &mut EntityWorldMut) {
         entity.insert((self.layout.clone(), SkipNodeRender));
         let layout_root = entity.world_scope(|world| {
-            let Some(layout) = world.resource_mut::<Assets<Layout>>().remove(&self.layout) else {
-                return None;
-            };
+            let layout = world
+                .resource_mut::<Assets<Layout>>()
+                .remove(&self.layout)
+                .unwrap();
             let entity = crate::loader::spawn_layout(world, &layout);
 
             world
@@ -94,12 +93,8 @@ impl UserUiNode for SublayoutNode {
                 .insert(self.layout.id(), layout);
 
             world.entity_mut(entity).insert(SpawnedSublayout);
-            Some(entity)
+            entity
         });
-
-        let Some(layout_root) = layout_root else {
-            return;
-        };
 
         entity.add_child(layout_root);
     }
@@ -186,41 +181,6 @@ impl EditorUiNode for SublayoutNode {
                         entity.despawn_recursive();
                     }
                 }
-            });
-        }
-    }
-}
-
-pub fn spawn_loaded_layouts(
-    mut commands: Commands,
-    mut reader: EventReader<AssetEvent<Layout>>,
-    nodes: Query<(Entity, &Handle<Layout>)>,
-) {
-    let loaded = reader
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::LoadedWithDependencies { id } => Some(*id),
-            _ => None,
-        })
-        .collect::<HashSet<AssetId<Layout>>>();
-
-    for (entity, handle) in nodes.iter() {
-        if loaded.contains(&handle.id()) {
-            let handle = handle.clone();
-            commands.add(move |world: &mut World| {
-                let layout = world
-                    .resource_mut::<Assets<Layout>>()
-                    .remove(&handle)
-                    .unwrap();
-                let spawned = crate::loader::spawn_layout(world, &layout);
-
-                world
-                    .resource_mut::<Assets<Layout>>()
-                    .insert(handle.id(), layout);
-
-                world.entity_mut(spawned).insert(SpawnedSublayout);
-
-                world.entity_mut(entity).add_child(entity);
             });
         }
     }
