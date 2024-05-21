@@ -46,5 +46,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     sample.a *= textureSample(mask_texture, mask_sampler, in.uv).a;
 #endif
 
+    if (sample.a < 0.01) {
+        discard;
+    }
+
     return postprocess_fragment(in.uv, sample, view);
 }

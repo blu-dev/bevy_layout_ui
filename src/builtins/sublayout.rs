@@ -81,6 +81,9 @@ impl UserUiNode for SublayoutNode {
 
     fn spawn(&self, entity: &mut EntityWorldMut) {
         entity.insert((self.layout.clone(), SkipNodeRender));
+        if self.layout.id() == AssetId::default() {
+            return;
+        }
         let layout_root = entity.world_scope(|world| {
             let layout = world
                 .resource_mut::<Assets<Layout>>()

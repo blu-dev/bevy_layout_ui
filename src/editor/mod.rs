@@ -326,6 +326,7 @@ fn display_node_tree_impl(
                                 NullNode,
                                 SkipNodeRender,
                                 NodeUserDataLabels::default(),
+                                VisibilityBundle::default(),
                             ))
                             .id(),
                     ));

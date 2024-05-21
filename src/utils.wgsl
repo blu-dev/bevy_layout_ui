@@ -44,7 +44,7 @@ fn interpolate_vertex_color(pos: vec2<f32>, view_: CommonNodeUniform) -> vec4<f3
             return view.vertex_colors[i];
         }
 
-        d = 1.0 / exp2(d);
+        d = 1.0 / pow(d, 2.0);
         total += d;
         distances[i] = d;
     }

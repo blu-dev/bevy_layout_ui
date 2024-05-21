@@ -4,7 +4,8 @@ use bevy::asset::load_internal_asset;
 use bevy::prelude::*;
 use bevy::render::render_phase::{AddRenderCommand, RenderPhase};
 use bevy::render::render_resource::{
-    PipelineCache, RenderPipelineDescriptor, SpecializedRenderPipeline, SpecializedRenderPipelines,
+    CompareFunction, PipelineCache, RenderPipelineDescriptor, SpecializedRenderPipeline,
+    SpecializedRenderPipelines, StencilFaceState, StencilOperation,
 };
 use bevy::render::{Render, RenderApp, RenderSet};
 use bevy::{
@@ -21,6 +22,7 @@ use bevy::{
     },
     utils::{intern::Interned, HashMap},
 };
+use egui::DragValue;
 use serde::{Deserialize, Serialize};
 
 use crate::render::{
@@ -34,15 +36,23 @@ pub struct ImageNodeLabel;
 
 decl_node_label!(ImageNodeLabel);
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum StencilReference {
+    Writer(u8),
+    Reader(u8),
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct ImageNodeData {
     path: PathBuf,
+    stencil_reference: Option<StencilReference>,
     mask_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Component, Default)]
 pub struct ImageNode {
     image: Handle<Image>,
+    stencil_reference: Option<StencilReference>,
     mask: Option<Handle<Image>>,
 }
 
@@ -60,6 +70,7 @@ impl UserUiNode for ImageNode {
     ) -> Result<Self, E> {
         Ok(Self {
             image: load_context.load(serde.path.clone()),
+            stencil_reference: serde.stencil_reference,
             mask: serde.mask_path.map(|path| load_context.load(path)),
         })
     }
@@ -86,6 +97,7 @@ impl UserUiNode for ImageNode {
 
         Ok(ImageNodeData {
             path: path.path().to_path_buf(),
+            stencil_reference: self.stencil_reference,
             mask_path: mask_path.map(|path| path.path().to_path_buf()),
         })
     }
@@ -103,6 +115,9 @@ impl UserUiNode for ImageNode {
 
     fn visit_asset_dependencies(&self, visit_fn: &mut dyn FnMut(bevy::asset::UntypedAssetId)) {
         visit_fn(self.image.id().untyped());
+        if let Some(mask) = self.mask.as_ref() {
+            visit_fn(mask.id().untyped());
+        }
     }
 }
 
@@ -126,6 +141,55 @@ impl crate::EditorUiNode for ImageNode {
         ui.horizontal(|ui| {
             ui.label("Image Path");
             ui.text_edit_singleline(&mut current_path);
+        });
+
+        let stencil_reference = &mut entity
+            .get_mut::<ImageNode>()
+            .unwrap()
+            .into_inner()
+            .stencil_reference;
+        ui.horizontal(|ui| {
+            const NAMES: [&'static str; 3] = ["None", "Reader", "Writer"];
+            let mut index = match stencil_reference {
+                None => 0,
+                Some(StencilReference::Reader(_)) => 1,
+                Some(StencilReference::Writer(_)) => 2,
+            };
+
+            if egui::ComboBox::new("stencil-reference", "Stencil Reference")
+                .show_index(ui, &mut index, NAMES.len(), |idx| NAMES[idx])
+                .changed()
+            {
+                *stencil_reference = match index {
+                    0 => None,
+                    1 => {
+                        if let Some(StencilReference::Reader(idx) | StencilReference::Writer(idx)) =
+                            *stencil_reference
+                        {
+                            Some(StencilReference::Reader(idx))
+                        } else {
+                            Some(StencilReference::Reader(0))
+                        }
+                    }
+                    2 => {
+                        if let Some(StencilReference::Reader(idx) | StencilReference::Writer(idx)) =
+                            *stencil_reference
+                        {
+                            Some(StencilReference::Writer(idx))
+                        } else {
+                            Some(StencilReference::Writer(0))
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            match stencil_reference.as_mut() {
+                None => {}
+                Some(StencilReference::Reader(value) | StencilReference::Writer(value)) => {
+                    ui.add(DragValue::new(value));
+                }
+            }
         });
 
         let handle = entity.world().resource::<AssetServer>().load(&current_path);
@@ -181,6 +245,8 @@ impl crate::EditorUiNode for ImageNode {
 struct ExtractedImageNode {
     image: AssetId<Image>,
     mask: Option<AssetId<Image>>,
+    stencil_reference: Option<u8>,
+    stencil_mask: ImageNodePipelineKey,
 }
 
 #[derive(Resource, Deref, DerefMut, Default)]
@@ -190,6 +256,8 @@ bitflags::bitflags! {
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct ImageNodePipelineKey : u8 {
         const USES_MASK_TEXTURE = 1 << 0;
+        const USES_STENCIL_READER = 1 << 1;
+        const USES_STENCIL_WRITER = 1 << 2;
     }
 }
 
@@ -208,6 +276,13 @@ impl SpecializedRenderPipeline for ImageNodePipeline {
     type Key = ImageNodePipelineKey;
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        assert!(
+            !key.contains(
+                ImageNodePipelineKey::USES_STENCIL_READER
+                    | ImageNodePipelineKey::USES_STENCIL_WRITER
+            ),
+            "Read/write from/to stencil is mutually exclusive"
+        );
         let mut pipeline = self.default_pipeline.clone();
         if key.intersects(ImageNodePipelineKey::USES_MASK_TEXTURE) {
             pipeline.vertex.shader_defs.push("USE_MASK_IMAGE".into());
@@ -218,6 +293,32 @@ impl SpecializedRenderPipeline for ImageNodePipeline {
                 .shader_defs
                 .push("USE_MASK_IMAGE".into());
             pipeline.layout.push(self.mask_texture_bind_group.clone());
+        }
+
+        if key.intersects(ImageNodePipelineKey::USES_STENCIL_READER) {
+            let state = pipeline.depth_stencil.as_mut().unwrap();
+            state.stencil.front = StencilFaceState {
+                compare: CompareFunction::Equal,
+                ..Default::default()
+            };
+
+            state.stencil.back = StencilFaceState {
+                compare: CompareFunction::Equal,
+                ..Default::default()
+            };
+        } else if key.intersects(ImageNodePipelineKey::USES_STENCIL_WRITER) {
+            let state = pipeline.depth_stencil.as_mut().unwrap();
+            state.stencil.front = StencilFaceState {
+                compare: CompareFunction::Always,
+                pass_op: StencilOperation::Replace,
+                ..Default::default()
+            };
+
+            state.stencil.back = StencilFaceState {
+                compare: CompareFunction::Always,
+                pass_op: StencilOperation::Replace,
+                ..Default::default()
+            };
         }
 
         pipeline
@@ -292,11 +393,30 @@ fn extract_image_nodes(
 ) {
     extracted.clear();
     for (entity, node) in nodes.iter() {
+        let stencil_mask;
+        let stencil_reference;
+
+        match node.stencil_reference {
+            Some(StencilReference::Reader(value)) => {
+                stencil_mask = ImageNodePipelineKey::USES_STENCIL_READER;
+                stencil_reference = Some(value);
+            }
+            Some(StencilReference::Writer(value)) => {
+                stencil_mask = ImageNodePipelineKey::USES_STENCIL_WRITER;
+                stencil_reference = Some(value);
+            }
+            None => {
+                stencil_mask = ImageNodePipelineKey::empty();
+                stencil_reference = None;
+            }
+        }
         extracted.insert(
             entity,
             ExtractedImageNode {
                 image: node.image.id(),
                 mask: node.mask.as_ref().map(|mask| mask.id()),
+                stencil_mask,
+                stencil_reference,
             },
         );
     }
@@ -316,7 +436,7 @@ fn prepare_image_nodes(
     mut prepared_images: ResMut<PreparedImages>,
     gpu_images: Res<RenderAssets<Image>>,
     draw_functions: Res<DrawFunctions<UiNodeItem>>,
-    mut batch: Local<Vec<(Entity, ImageIds)>>,
+    mut batch: Local<Vec<(Entity, RenderImageData)>>,
 ) {
     let function = draw_functions
         .read()
@@ -329,7 +449,7 @@ fn prepare_image_nodes(
                 continue;
             };
 
-            let mut key = ImageNodePipelineKey::empty();
+            let mut key = extracted_image.stencil_mask;
 
             key.set(
                 ImageNodePipelineKey::USES_MASK_TEXTURE,
@@ -388,9 +508,10 @@ fn prepare_image_nodes(
 
             batch.push((
                 item.entity,
-                ImageIds {
+                RenderImageData {
                     image: extracted_image.image,
                     mask: extracted_image.mask,
+                    stencil_reference: extracted_image.stencil_reference,
                 },
             ));
         }
@@ -409,16 +530,17 @@ pub type ImageNodeDrawFunction = (
 );
 
 #[derive(Component)]
-pub struct ImageIds {
+pub struct RenderImageData {
     image: AssetId<Image>,
     mask: Option<AssetId<Image>>,
+    stencil_reference: Option<u8>,
 }
 
 pub struct BindImageGroups;
 
 impl RenderCommand<UiNodeItem> for BindImageGroups {
     type Param = SRes<PreparedImages>;
-    type ItemQuery = &'static ImageIds;
+    type ItemQuery = &'static RenderImageData;
     type ViewQuery = ();
 
     fn render<'w>(
@@ -445,6 +567,10 @@ impl RenderCommand<UiNodeItem> for BindImageGroups {
             };
 
             pass.set_bind_group(2, prepared, &[]);
+        }
+
+        if let Some(stencil) = entity.stencil_reference {
+            pass.set_stencil_reference(stencil as u32);
         }
 
         RenderCommandResult::Success

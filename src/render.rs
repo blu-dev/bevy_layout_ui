@@ -20,11 +20,13 @@ use bevy::render::render_phase::{
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
     BlendState, BufferBinding, BufferBindingType, BufferUsages, BufferVec, CachedRenderPipelineId,
-    ColorTargetState, ColorWrites, DynamicUniformBuffer, FragmentState, FrontFace, IndexFormat,
-    LoadOp, MultisampleState, Operations, PipelineCache, PolygonMode, PrimitiveState,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
-    ShaderType, StoreOp, TextureFormat, VertexBufferLayout, VertexFormat, VertexState,
-    VertexStepMode,
+    ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState,
+    DynamicUniformBuffer, Extent3d, FragmentState, FrontFace, IndexFormat, LoadOp,
+    MultisampleState, Operations, PipelineCache, PolygonMode, PrimitiveState,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
+    ShaderType, StencilFaceState, StencilState, StoreOp, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages, TextureView, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::BevyDefault;
@@ -418,8 +420,22 @@ impl DefaultNodePipeline {
                 polygon_mode: PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
+            depth_stencil: Some(DepthStencilState {
+                format: TextureFormat::Stencil8,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: StencilState {
+                    front: StencilFaceState::IGNORE,
+                    back: StencilFaceState::IGNORE,
+                    read_mask: !0,
+                    write_mask: !0,
+                },
+                bias: DepthBiasState::default(),
+            }),
+            multisample: MultisampleState {
+                count: 4,
+                ..Default::default()
+            },
             fragment: Some(FragmentState {
                 shader: Self::SHADER.clone(),
                 shader_defs: vec![],
@@ -758,12 +774,119 @@ impl RenderCommand<UiNodeItem> for DrawUiPhaseItem {
     }
 }
 
+#[derive(Component, Clone)]
+pub struct RenderTargetDepthStencils {
+    main_target_resolution: Extent3d,
+    main_target_texture: Texture,
+    main_target_texture_view: TextureView,
+    alt_target_resolution: Extent3d,
+    alt_target_texture: Texture,
+    alt_target_texture_view: TextureView,
+}
+
+impl RenderTargetDepthStencils {
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.main_target_texture, &mut self.alt_target_texture);
+        std::mem::swap(
+            &mut self.main_target_texture_view,
+            &mut self.alt_target_texture_view,
+        );
+        std::mem::swap(
+            &mut self.main_target_resolution,
+            &mut self.alt_target_resolution,
+        );
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct RenderTargetLookup(EntityHashMap<RenderTargetDepthStencils>);
+
+pub fn prepare_depth_stencils(
+    mut commands: Commands,
+    device: Res<RenderDevice>,
+    mut lookup: ResMut<RenderTargetLookup>,
+    mut cameras: Query<(Entity, &ViewTarget), With<RenderPhase<UiNodeItem>>>,
+) {
+    for (entity, target) in cameras.iter_mut() {
+        let mut is_new = false;
+        let targets = lookup.0.entry(entity).or_insert_with(|| {
+            is_new = true;
+            let main = target.main_texture();
+            let main_size = main.size();
+            let main_target = device.create_texture(&TextureDescriptor {
+                label: Some("render target stencil texture"),
+                size: main_size,
+                mip_level_count: target.sampled_main_texture().unwrap().mip_level_count(),
+                sample_count: target.sampled_main_texture().unwrap().sample_count(),
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Stencil8,
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let main_target_view = main_target.create_view(&Default::default());
+
+            let alt = target.main_texture_other();
+            let alt_size = alt.size();
+            let alt_target = device.create_texture(&TextureDescriptor {
+                label: Some("render target alt stencil texture"),
+                size: alt_size,
+                mip_level_count: alt.mip_level_count(),
+                sample_count: alt.sample_count(),
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Stencil8,
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let alt_target_view = alt_target.create_view(&default());
+            RenderTargetDepthStencils {
+                main_target_resolution: main_size,
+                main_target_texture: main_target,
+                main_target_texture_view: main_target_view,
+                alt_target_resolution: alt_size,
+                alt_target_texture: alt_target,
+                alt_target_texture_view: alt_target_view,
+            }
+        });
+
+        if !is_new {
+            targets.swap();
+        }
+
+        if targets.main_target_resolution != target.main_texture().size()
+            || targets.main_target_texture.mip_level_count()
+                != target.sampled_main_texture().unwrap().mip_level_count()
+            || targets.main_target_texture.sample_count()
+                != target.sampled_main_texture().unwrap().sample_count()
+        {
+            let main = target.main_texture();
+            let main_size = main.size();
+            let main_target = device.create_texture(&TextureDescriptor {
+                label: Some("render target stencil texture"),
+                size: main_size,
+                mip_level_count: target.sampled_main_texture().unwrap().mip_level_count(),
+                sample_count: target.sampled_main_texture().unwrap().sample_count(),
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Stencil8,
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let main_target_view = main_target.create_view(&Default::default());
+            targets.main_target_resolution = main_size;
+            targets.main_target_texture = main_target;
+            targets.main_target_texture_view = main_target_view;
+        }
+
+        commands.entity(entity).insert(targets.clone());
+    }
+}
+
 impl ViewNode for UiLayoutNode {
     type ViewQuery = (
         Entity,
         &'static ExtractedCamera,
         &'static ViewTarget,
         &'static RenderPhase<UiNodeItem>,
+        &'static RenderTargetDepthStencils,
         Option<&'static RenderLayers>,
     );
 
@@ -771,7 +894,7 @@ impl ViewNode for UiLayoutNode {
         &self,
         _: &mut bevy::render::render_graph::RenderGraphContext,
         render_context: &mut bevy::render::renderer::RenderContext<'w>,
-        (entity, camera, target, phase, camera_layer): bevy::ecs::query::QueryItem<
+        (entity, camera, target, phase, depth, camera_layer): bevy::ecs::query::QueryItem<
             'w,
             Self::ViewQuery,
         >,
@@ -786,15 +909,15 @@ impl ViewNode for UiLayoutNode {
         {
             let rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("UiLayoutNode.rpass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: target.main_texture_view(),
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
+                color_attachments: &[Some(target.get_color_attachment())],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &depth.main_target_texture_view,
+                    depth_ops: None,
+                    stencil_ops: Some(Operations {
+                        load: LoadOp::Clear(0),
                         store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
+                    }),
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -868,6 +991,7 @@ impl Plugin for UiRenderPlugin {
             .init_resource::<DefaultNodePipeline>()
             .init_resource::<PreparedResources>()
             .init_resource::<DrawFunctions<UiNodeItem>>()
+            .init_resource::<RenderTargetLookup>()
             .add_render_command::<UiNodeItem, DefaultNodeDrawFunction>()
             .add_systems(ExtractSchedule, extract_ui_phases)
             .add_systems(ExtractSchedule, extract_nodes)
@@ -875,6 +999,7 @@ impl Plugin for UiRenderPlugin {
                 Render,
                 (
                     queue_ui_nodes.in_set(RenderSet::Queue),
+                    prepare_depth_stencils.in_set(RenderSet::Prepare),
                     prepare_ui_nodes.in_set(RenderSet::Prepare),
                     sort_phase_system::<UiNodeItem>.in_set(RenderSet::PhaseSort),
                 ),
