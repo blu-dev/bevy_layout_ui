@@ -68,6 +68,24 @@ pub enum LocalStyle {
     Oblique,
 }
 
+#[derive(Deserialize, Serialize, Default, Copy, Clone, Debug)]
+pub enum Alignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl From<Alignment> for cosmic_text::Align {
+    fn from(value: Alignment) -> Self {
+        match value {
+            Alignment::Left => Self::Left,
+            Alignment::Center => Self::Center,
+            Alignment::Right => Self::Right,
+        }
+    }
+}
+
 fn default_style() -> Style {
     Style::Normal
 }
@@ -78,6 +96,8 @@ pub struct TextNodeData {
     pub font_size: u32,
     #[serde(with = "LocalStyle", default = "default_style")]
     pub style: Style,
+    #[serde(default = "Alignment::default")]
+    pub alignment: Alignment,
     pub text: String,
 }
 
@@ -85,6 +105,7 @@ pub struct TextNodeData {
 pub struct TextNode {
     pub font_face: String,
     pub font_size: u32,
+    pub alignment: Alignment,
     pub style: Style,
     pub text: String,
 }
@@ -94,6 +115,7 @@ impl Default for TextNode {
         Self {
             font_face: "Times New Roman".into(),
             font_size: 32,
+            alignment: Default::default(),
             style: Style::Normal,
             text: "Enter Text Here".into(),
         }
@@ -116,6 +138,7 @@ impl UserUiNode for TextNode {
         Ok(TextNodeData {
             font_face: self.font_face.clone(),
             font_size: self.font_size,
+            alignment: self.alignment,
             style: self.style,
             text: self.text.clone(),
         })
@@ -128,6 +151,7 @@ impl UserUiNode for TextNode {
         Ok(Self {
             font_face: serde.font_face,
             font_size: serde.font_size,
+            alignment: serde.alignment,
             style: serde.style,
             text: serde.text,
         })
@@ -184,6 +208,31 @@ impl crate::EditorUiNode for TextNode {
         });
 
         ui.horizontal(|ui| {
+            const ALIGNS: [&'static str; 3] = ["Left", "Center", "Right"];
+
+            let mut index = match &text_node.alignment {
+                Alignment::Left => 0,
+                Alignment::Center => 1,
+                Alignment::Right => 2,
+            };
+
+            ui.label("Alignment");
+            egui::ComboBox::new("text-node-alignment", "").show_index(
+                ui,
+                &mut index,
+                ALIGNS.len(),
+                |idx| ALIGNS[idx],
+            );
+
+            text_node.alignment = match index {
+                0 => Alignment::Left,
+                1 => Alignment::Center,
+                2 => Alignment::Right,
+                _ => unreachable!(),
+            };
+        });
+
+        ui.horizontal(|ui| {
             ui.label("Text");
             ui.text_edit_multiline(&mut text_node.text);
         });
@@ -198,6 +247,7 @@ struct ExtractedTextNode {
     font_face: String,
     font_size: u32,
     style: Style,
+    alignment: cosmic_text::Align,
     text: String,
     node_size: Vec2,
 }
@@ -283,6 +333,7 @@ fn extract_text_nodes(
                 font_face: node.font_face.clone(),
                 font_size: node.font_size,
                 style: node.style,
+                alignment: cosmic_text::Align::from(node.alignment),
                 text: node.text.clone(),
                 node_size: node_size.0,
             },
@@ -359,6 +410,11 @@ fn prepare_text_nodes(
                 },
                 Shaping::Basic,
             );
+
+            for idx in 0..borrowed.lines.len() {
+                borrowed.lines[idx].set_align(Some(extracted_node.alignment));
+                borrowed.line_layout(idx);
+            }
             (*entity, buffer)
         })
         .collect::<Vec<_>>();

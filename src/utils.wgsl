@@ -33,28 +33,10 @@ fn transform_node_to_screen(model: NodeVertexInput, layout_to_ndc: mat3x3<f32>, 
     return (layout_to_ndc * matrix * vec3(coordinates, 1.0)).xy;
 }
 
-fn interpolate_vertex_color(pos: vec2<f32>, view_: CommonNodeUniform) -> vec4<f32> {
-    var view = view_;
-    var total: f32 = 0.0;
-    var distances: array<f32, 4> = array(0.0, 0.0, 0.0, 0.0);
-    for (var i = 0u; i < 4u; i++) {
-        let p = vec2<f32>(f32(i & 0x1u), f32((i & 0x2u) >> 1u));
-        var d = distance(p, pos);
-        if (d == 0.0) {
-            return view.vertex_colors[i];
-        }
-
-        d = 1.0 / pow(d, 2.0);
-        total += d;
-        distances[i] = d;
-    }
-
-    var color = vec4<f32>(0.0);
-    for (var i = 0u; i < 4u; i++) {
-        let ratio: f32 = distances[i] / total;
-        color += view.vertex_colors[i] * ratio;
-    }
-    return color;
+fn interpolate_vertex_color(pos: vec2<f32>, view: CommonNodeUniform) -> vec4<f32> {
+    let x1 = view.vertex_colors[0] * (1.0 - pos.x) + view.vertex_colors[1] * pos.x;
+    let x2 = view.vertex_colors[2] * (1.0 - pos.x) + view.vertex_colors[3] * pos.x;
+    return x1 * (1.0 - pos.y) + x2 * pos.y;
 }
 
 fn preprocess_fragment(uv: vec2<f32>, clip: vec4<f32>) {
