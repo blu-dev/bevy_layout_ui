@@ -35,7 +35,7 @@ use self::buffer_glyph::BufferGlyphMaps;
 
 mod buffer_glyph;
 
-#[derive(Resource)]
+#[derive(Resource, Deref, DerefMut)]
 pub struct CosmicFontSystem(FontSystem);
 
 #[derive(Resource)]
@@ -49,7 +49,22 @@ impl Default for CosmicSwashCache {
 
 impl FromWorld for CosmicFontSystem {
     fn from_world(_: &mut bevy::prelude::World) -> Self {
-        let system = FontSystem::new();
+        let mut system = FontSystem::new();
+
+        for file in std::fs::read_dir("./assets/fonts").unwrap() {
+            let file = file.unwrap();
+            if !file.file_type().unwrap().is_file() {
+                continue;
+            }
+
+            let path = file.path();
+            let ext = path.extension().unwrap();
+            if ext.to_str().unwrap() != "ttf" {
+                continue;
+            }
+
+            system.db_mut().load_font_file(path).unwrap();
+        }
 
         Self(system)
     }
