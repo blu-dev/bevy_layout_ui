@@ -15,6 +15,7 @@ serde-value = "0.7.0"
 cosmic-text = "0.11.2"
 indexmap = { version = "2.2.6", features = ["serde"] }
 bitflags = "2.5.0"
+lyon = "1.0.1"
 
 [features]
 editor-ui = ["egui", "bevy-inspector-egui"]
