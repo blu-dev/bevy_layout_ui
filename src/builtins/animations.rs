@@ -482,8 +482,8 @@ const _: () = {
 
         fn edit_content(content: &mut Self::Content, ui: &mut egui::Ui) {
             egui::Grid::new("Builtins.Size.edit").show(ui, |ui| {
-                ui.add(DragValue::new(&mut content.x).clamp_range(0.0..=INFINITY));
-                ui.add(DragValue::new(&mut content.y).clamp_range(0.0..=INFINITY));
+                ui.add(DragValue::new(&mut content.x).clamp_range(0.0..=std::f32::INFINITY));
+                ui.add(DragValue::new(&mut content.y).clamp_range(0.0..=std::f32::INFINITY));
             });
         }
     }
@@ -527,8 +527,8 @@ const _: () = {
 
         fn edit_content(content: &mut Self::Content, ui: &mut egui::Ui) {
             egui::Grid::new("Builtins.Position.edit").show(ui, |ui| {
-                ui.add(DragValue::new(&mut content.x).clamp_range(0.0..=INFINITY));
-                ui.add(DragValue::new(&mut content.y).clamp_range(0.0..=INFINITY));
+                ui.add(DragValue::new(&mut content.x));
+                ui.add(DragValue::new(&mut content.y));
             });
         }
 
