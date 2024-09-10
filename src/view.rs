@@ -41,7 +41,7 @@ impl<'a> NodeView<'a> {
         let mut current = self.entity.clone();
 
         'outer: for child_name in name.split('.') {
-            let children = self.entity.get::<Children>()?;
+            let children = current.get::<Children>()?;
             for child in children.iter() {
                 let child = self.world.entity(*child);
                 let Some(name) = child.get::<Name>() else {
@@ -207,5 +207,18 @@ impl NodeViewMut<'_> {
             .push(PlaybackRequest::Play {
                 restore_on_finish: false,
             });
+    }
+
+    #[track_caller]
+    pub fn stop_animation(&mut self, name: impl AsRef<str>) {
+        let name = name.as_ref();
+        self.world
+            .get_mut::<UiLayoutAnimationController>(self.entity)
+            .expect("Failed to get UiLayoutAnimationController, is this a layout?")
+            .animations
+            .get_mut(name)
+            .unwrap_or_else(|| panic!("Failed to stop animation {name} because it is missing"))
+            .requests
+            .push(PlaybackRequest::Stop);
     }
 }
