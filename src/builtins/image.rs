@@ -56,6 +56,16 @@ pub struct ImageNode {
     mask: Option<Handle<Image>>,
 }
 
+impl ImageNode {
+    pub fn set_image(&mut self, image: Handle<Image>) {
+        self.image = image;
+    }
+
+    pub fn set_mask(&mut self, image: impl Into<Option<Handle<Image>>>) {
+        self.mask = image.into();
+    }
+}
+
 impl UserUiNode for ImageNode {
     const NAME: &'static str = "Image";
     type Serde = ImageNodeData;

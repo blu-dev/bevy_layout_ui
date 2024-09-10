@@ -486,6 +486,7 @@ pub struct UiNodeSettings {
     pub target_resolution: UVec2,
     pub vertex_colors: VertexColors,
     pub opacity: f32,
+    pub z_index: Option<ZIndex>,
 }
 
 pub struct UiRenderPlugin;

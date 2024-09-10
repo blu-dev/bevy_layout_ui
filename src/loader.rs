@@ -26,7 +26,7 @@ use crate::{
         UiLayoutAnimationController,
     },
     builtins::sublayout::SpawnedSublayout,
-    math::{GlobalTransform, NodeSize, Transform, ZIndex},
+    math::{BoundingBox, GlobalTransform, NodeSize, Transform, ZIndex},
     render::{SkipNodeRender, UiNodeSettings, VertexColors},
     user_data::{DynamicUserData, RegisteredUserData, UserDataLabel, UserDataRegistry},
     NodeLabel, RegisteredUiNode, RegisteredUserUiNodes, UiNodeRegistry,
@@ -241,6 +241,34 @@ pub struct UiNode {
     pub user_data: Vec<UserDataValue>,
 }
 
+impl UiNode {
+    pub fn bounding_box(&self) -> BoundingBox {
+        let pos = self.attributes.position;
+        let angle = Vec2::from_angle(self.attributes.rotation.to_radians());
+        let he = self.attributes.size / 2.0;
+        let corners = [
+            pos + he * angle,
+            pos - he * angle,
+            pos + Vec2::new(he.x, -he.y) * angle,
+            pos + Vec2::new(-he.x, he.y) * angle,
+        ];
+
+        let min = corners
+            .iter()
+            .fold(Vec2::MAX, |accum, item| accum.min(*item));
+        let max = corners
+            .iter()
+            .fold(Vec2::MIN, |accum, item| accum.max(*item));
+
+        let mut this = BoundingBox::new(min, max);
+        for child in self.children.iter() {
+            this = this.union(child.bounding_box());
+        }
+
+        this
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct UiNodeRepr {
     name: String,
@@ -286,6 +314,22 @@ const fn default_one() -> f32 {
     1.0
 }
 
+#[derive(Default, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, Debug, Reflect)]
+pub enum ZIndexRepr {
+    #[default]
+    Auto,
+    Explicit(isize),
+}
+
+impl From<ZIndexRepr> for Option<ZIndex> {
+    fn from(value: ZIndexRepr) -> Self {
+        match value {
+            ZIndexRepr::Auto => None,
+            ZIndexRepr::Explicit(index) => Some(ZIndex(index)),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Reflect)]
 #[reflect(no_field_bounds)]
 pub struct UiNodeAttributes {
@@ -303,6 +347,8 @@ pub struct UiNodeAttributes {
     pub clip_rect: Option<Rect>,
     #[serde(default = "default_one")]
     pub opacity: f32,
+    #[serde(default)]
+    pub z_index: ZIndexRepr,
 }
 
 #[derive(TypePath)]
@@ -311,6 +357,20 @@ pub struct Layout {
     pub nodes: Vec<UiNode>,
     pub animations: HashMap<String, Arc<RwLock<Animation>>>,
     pub user_data: Vec<UserDataValue>,
+}
+
+impl Layout {
+    pub fn calculate_bounding_box_recursive(&self) -> BoundingBox {
+        if self.nodes.is_empty() {
+            return BoundingBox::new(Vec2::ZERO, Vec2::ZERO);
+        }
+        let mut bbox = self.nodes[0].bounding_box();
+        for node in self.nodes.iter().skip(1) {
+            bbox = bbox.union(node.bounding_box());
+        }
+
+        bbox
+    }
 }
 
 impl Asset for Layout {}
@@ -337,8 +397,15 @@ pub struct DynamicNodeLabel(pub(crate) Interned<dyn NodeLabel>);
 
 fn apply_z_index(world: &mut World, children: impl IntoIterator<Item = Entity>, index: &mut isize) {
     for child in children {
-        world.entity_mut(child).insert(ZIndex(*index));
-        *index += 1;
+        let z_index =
+            if let Some(ZIndex(index)) = world.get::<UiNodeSettings>(child).unwrap().z_index {
+                index
+            } else {
+                let local_index = *index;
+                *index += 1;
+                local_index
+            };
+        world.entity_mut(child).insert(ZIndex(z_index));
         let children = world
             .get::<Children>(child)
             .into_iter()
@@ -360,12 +427,13 @@ pub fn spawn_layout(world: &mut World, layout: &Layout) -> Entity {
                 .with_parent_anchor(Anchor::TopLeft),
             GlobalTransform::default(),
             Anchor::TopLeft,
-            NodeSize(layout.resolution.as_vec2()),
+            NodeSize(layout.calculate_bounding_box_recursive().size()),
             UiNodeSettings {
                 clip_rect: None,
                 target_resolution: layout.resolution,
                 vertex_colors: VertexColors::default(),
                 opacity: 1.0,
+                z_index: None,
             },
             SkipNodeRender,
             UiLayoutAnimationController {
@@ -442,6 +510,7 @@ fn spawn_layout_inner<'a>(
                 target_resolution: resolution,
                 vertex_colors: node.attributes.vertex_colors,
                 opacity: node.attributes.opacity,
+                z_index: node.attributes.z_index.into(),
             },
             DynamicNodeLabel(node.label),
             Name::new(node_name.clone()),
@@ -534,6 +603,12 @@ fn marshall_ui_node(
             vertex_colors: node.get::<UiNodeSettings>().unwrap().vertex_colors,
             clip_rect: node.get::<UiNodeSettings>().unwrap().clip_rect,
             opacity: node.get::<UiNodeSettings>().unwrap().opacity,
+            z_index: node
+                .get::<UiNodeSettings>()
+                .unwrap()
+                .z_index
+                .map(|index| ZIndexRepr::Explicit(index.0))
+                .unwrap_or_default(),
         },
         label: label.0,
         data: reconstructed,

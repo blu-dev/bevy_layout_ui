@@ -2,7 +2,8 @@
 
 use bevy::{ecs::query::QueryData, math::Affine2, prelude::*, sprite::Anchor};
 
-#[derive(Component, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Reflect)]
+#[derive(Component, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Reflect, Default)]
+#[reflect(Default)]
 pub struct ZIndex(pub isize);
 
 #[derive(Debug, Copy, Clone, Component, Reflect, Deref, DerefMut)]
@@ -14,6 +15,23 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    pub(crate) fn new(a: Vec2, b: Vec2) -> Self {
+        Self {
+            inner: Rect::from_corners(a, b),
+        }
+    }
+
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self::new(
+            self.inner.min.min(other.inner.min),
+            self.inner.max.max(other.inner.max),
+        )
+    }
+
+    pub fn size(&self) -> Vec2 {
+        self.inner.size()
+    }
+
     pub const fn top_left(&self) -> Vec2 {
         self.inner.min
     }

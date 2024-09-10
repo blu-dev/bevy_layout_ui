@@ -320,6 +320,7 @@ fn display_node_tree_impl(
                                     target_resolution: UVec2::new(1920, 1080),
                                     vertex_colors: VertexColors::default(),
                                     opacity: 1.0,
+                                    z_index: None,
                                 },
                                 ZIndex(2),
                                 DynamicNodeLabel(NullNodeLabel.intern()),
